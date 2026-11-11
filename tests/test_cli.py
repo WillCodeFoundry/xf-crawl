@@ -26,7 +26,7 @@ def test_nothing_is_left_behind_on_the_logger(forum, xf):
     assert logging.getLogger("xfcrawl").handlers == before
 
 
-@pytest.mark.parametrize("command", ["crawl", "pending", "mine", "migrate", "tunnelbear"])
+@pytest.mark.parametrize("command", ["crawl", "status", "pending", "mine", "migrate", "tunnelbear"])
 def test_every_command_has_help(command, capsys):
     with pytest.raises(SystemExit) as done:
         cli.main([command, "--help"])

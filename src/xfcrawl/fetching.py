@@ -18,6 +18,8 @@ import requests
 from xfcrawl.proxy import ProxyDown, ProxyRoute
 
 USER_AGENT = "xf-crawl (+https://github.com/WillCodeFoundry/xf-crawl)"
+DEFAULT_DELAY = 1.0
+DEFAULT_JITTER = 0.5
 _RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 _TRIES = 5
 _TIMEOUT_SECONDS = 30

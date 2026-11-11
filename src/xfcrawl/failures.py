@@ -75,3 +75,19 @@ class RetryPolicy:
 
     def next_try(self, failures: list[Failure]) -> datetime:
         return failures[-1].time + self.wait_after(failures)
+
+
+@dataclass(frozen=True)
+class Backoff:
+    """Whether a page that failed is still waiting, as of ``now``; never, with ``ignore``."""
+
+    policy: RetryPolicy
+    now: datetime
+    ignore: bool = False
+
+    def waiting_until(self, failures: list[Failure]) -> datetime | None:
+        """When the page may be tried again, or None if it may be now."""
+        if not failures or self.ignore:
+            return None
+        next_try = self.policy.next_try(failures)
+        return next_try if self.now < next_try else None

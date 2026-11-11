@@ -150,7 +150,8 @@ class Crawl:
             self._save(ref, url, response, verdict)
             summary.saved += 1
             if self.clock() - last_report > _REPORT_EVERY_SECONDS:
-                _LOGGER.info("    %d to fetch", self.plan.to_fetch_count())
+                _LOGGER.info("    %s: %d left in this stage, %d known to fetch in all", ref.stage.describe(),
+                             self.plan.to_fetch_in(ref.stage), self.plan.to_fetch_count())
                 last_report = self.clock()
 
     def _save(self, ref: PageRef, url: str, response: Response, verdict: Store) -> None:

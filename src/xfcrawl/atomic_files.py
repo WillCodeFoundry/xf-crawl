@@ -28,8 +28,15 @@ def atomic_write(target: Path, content: bytes) -> None:
 
 def append_line(target: Path, line: str) -> None:
     """Append one line and flush it to disk; a crash can cut only that line short."""
+    append_lines(target, [line])
+
+
+def append_lines(target: Path, lines: list[str]) -> None:
+    """Append lines and flush them to disk once; a crash can cut only the last line written short."""
+    if not lines:
+        return
     target.parent.mkdir(parents=True, exist_ok=True)
     with target.open("a", encoding="utf-8") as file:
-        file.write(line)
+        file.writelines(lines)
         file.flush()
         os.fsync(file.fileno())

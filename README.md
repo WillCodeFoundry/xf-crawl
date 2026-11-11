@@ -19,6 +19,7 @@ uv run xf --help
 ```bash
 uv run xf crawl http://localhost/forum/     # first run
 uv run xf crawl                             # carry on / fill gaps (the URL is remembered)
+uv run xf status                            # how far it has got, and time left (--forums for each forum)
 uv run xf pending                           # what is still to fetch (no network)
 uv run xf mine                              # statistics (--json for JSON)
 ```
@@ -72,12 +73,15 @@ URL-encode special characters in the username and password (`@` -> `%40`, `:` ->
 ```
 .crawl-store/
   config.json                                                   start URL and proxy setting
+  links.jsonl                                                   what each page links to, so restarts are quick
   tunnelbear.json                                               TunnelBear login tokens (if used)
   pages/index.html.gz
   pages/forums/french-english.46/page-0001.html.gz
   pages/threads/1234/parler-le-francais.1234567/page-0001.html.gz
   pages/threads/1234/parler-le-francais.1234567/page-0002.failed.jsonl
 ```
+
+`links.jsonl` only saves re-reading pages when a run starts. If it is deleted, the next run works it out again from the pages, more slowly.
 
 Folders are named like the site's URLs. The number is what counts: if a forum or thread is renamed on the site, its folder is renamed to match. Threads are grouped in folders of 1000 by number (`1234567 // 1000 = 1234`). A `.failed.jsonl` file has one line per failed attempt to fetch that page.
 
