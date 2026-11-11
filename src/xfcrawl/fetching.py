@@ -15,7 +15,7 @@ from typing import Protocol
 
 import requests
 
-from xfcrawl.proxy import ProxyDown, ProxyRoute
+from xfcrawl.proxy import ProxyDown, ProxyRoute, refused_credentials
 
 USER_AGENT = "xf-crawl (+https://github.com/WillCodeFoundry/xf-crawl)"
 DEFAULT_DELAY = 1.0
@@ -103,7 +103,7 @@ class PoliteFetcher:
                 if route is None:
                     raise FetchFailed("network", str(error)) from error
                 proxy_failures += 1
-                _switch(route, error, proxy_failures, auth_problem="407" in str(error))
+                _switch(route, error, proxy_failures, auth_problem=refused_credentials(error))
                 tries -= 1  # not the page's fault
                 continue
             except requests.RequestException as error:

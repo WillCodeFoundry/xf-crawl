@@ -3,7 +3,7 @@ import requests
 
 from tests.support.mock_forum import MockForum
 from xfcrawl.fetching import FetchFailed, Pacing, PoliteFetcher
-from xfcrawl.proxy import FixedProxy, Proxies, ProxyDown
+from xfcrawl.proxy import FixedProxy, Proxies, ProxyDown, refused_credentials
 
 
 class Waits:
@@ -86,3 +86,13 @@ def test_an_unreachable_fixed_proxy_is_proxy_down_not_a_page_failure(forum: Mock
     with pytest.raises(ProxyDown):
         fetcher(Waits(), FixedProxy("http://127.0.0.1:9")).get(forum.url)
     assert forum.hits == []
+
+
+@pytest.mark.parametrize(("message", "refused"), [
+    ("Tunnel connection failed: 407 Proxy Authentication Required", True),
+    ("407 Proxy Authentication Required", True),
+    ("hostname mismatch, certificate is not valid for '127.0.0.1' (127.0.0.1:40701)", False),
+    ("HTTPSConnectionPool(host='localhost', port=14079): Max retries exceeded", False),
+])
+def test_only_a_407_status_counts_as_refused_credentials(message, refused):
+    assert refused_credentials(requests.exceptions.ProxyError(message)) is refused
