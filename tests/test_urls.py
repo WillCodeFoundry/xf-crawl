@@ -73,3 +73,20 @@ def test_a_page_title_is_read_without_its_markup():
     assert xenforo.title('<h1 class="p-title-value"><span class="label">Q</span> Fran&ccedil;ais\n seulement</h1>') \
         == "Q Français seulement"
     assert xenforo.title("<h1>no class</h1>") is None
+
+
+def test_a_forum_known_only_by_number_gets_an_address_from_the_start_url():
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    from xfcrawl.failures import Backoff, RetryPolicy
+    from xfcrawl.layout import StoreLayout
+    from xfcrawl.link_index import LinkIndex
+    from xfcrawl.plan import CrawlPlan
+    from xfcrawl.store import PageStore
+
+    layout = StoreLayout.in_directory(Path.cwd())
+    plan = CrawlPlan("https://forum.example", PageStore(layout), LinkIndex(layout.link_index),
+                     Backoff(RetryPolicy(), datetime.now(timezone.utc)), frozenset({46}))
+    plan.rebuild()
+    assert plan.url_of(ItemRef(Kind.FORUM, 46).page(1)) == "https://forum.example/forums/46/"

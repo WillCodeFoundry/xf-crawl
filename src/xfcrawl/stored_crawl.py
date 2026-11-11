@@ -26,6 +26,7 @@ def open_stored_crawl(layout: StoreLayout, now: datetime) -> StoredCrawl:
     if crawl_config is None:
         raise XfError(f"no crawl in {layout.root}; start one with: uv run xf crawl URL")
     store = PageStore.open(layout)
-    plan = CrawlPlan(crawl_config.start_url, store, LinkIndex(layout.link_index), Backoff(RetryPolicy(), now))
+    plan = CrawlPlan(crawl_config.start_url, store, LinkIndex(layout.link_index), Backoff(RetryPolicy(), now),
+                     crawl_config.only_forums)
     plan.rebuild()
     return StoredCrawl(crawl_config, store, plan)

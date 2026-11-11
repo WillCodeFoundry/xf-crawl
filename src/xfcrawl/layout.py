@@ -1,7 +1,7 @@
 """Where everything sits in a crawl store. The only module that knows its current layout.
 
     .crawl-store/
-      config.json                                   CrawlConfig
+      config.json                                   CrawlConfig: start URL, proxy, forums to keep to
       links.jsonl                                   LinkIndex: what each page links to (a shortcut)
       tunnelbear.json                               TunnelBear login tokens, when used
       pages/index.html.gz
