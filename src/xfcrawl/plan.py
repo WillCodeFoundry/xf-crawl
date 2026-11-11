@@ -19,8 +19,10 @@ Other forums and threads are left out, even when already stored: they stay on di
 
 import heapq
 from collections import Counter
+from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from datetime import datetime
+from itertools import groupby
 from urllib.parse import urljoin, urlparse, urlsplit
 
 from xfcrawl import xenforo
@@ -67,35 +69,33 @@ class CrawlPlan:
         self._links = links
         self._only_forums = only_forums
         self._backoff = backoff
-        self._first_page_urls: dict[ItemRef, str] = {}
+        self._first_page_paths: dict[ItemRef, str] = {}  # paths, not URLs: one per thread, so size counts
         self._last_pages: dict[ItemRef, int] = {}
-        self._queue: list[tuple[tuple[int, int, int], PageRef]] = []
-        self._queued: set[PageRef] = set()
+        # Runs of consecutive pages of one forum or thread, all to fetch: (stage, number, first page, last
+        # page). Ordered as the pages are. A run per thread rather than an entry per page keeps the plan's
+        # size to the number of threads, not pages.
+        self._queue: list[tuple[Stage, int, int, int]] = []
         self._waiting: dict[PageRef, datetime] = {}
         self._site_prefix: str | None = None
         self._queued_by_stage: Counter[Stage] = Counter()
-        self._listed_in: dict[ItemRef, ItemRef] = {}
+        self._listed_in: dict[int, int] = {}  # thread number -> forum number
         self._titles: dict[ItemRef, str] = {}
 
     # -- building it --------------------------------------------------------------------------------
     def rebuild(self) -> Rebuilt:
-        """Work out the plan from the store and the link index."""
-        self._want(INDEX_PAGE)
+        """Work out the plan from the store and the link index.
+
+        In two passes over the index, which is read as a stream, never held: first the index's and forums'
+        pages, which say which threads are in scope; then the threads' first pages. In each, a stored page the
+        index has nothing for is read, and added to it."""
+        self._want_pages(INDEX_PAGE.item, 1, 1)
         for forum_id in sorted(self._only_forums or ()):  # wanted even if only an unlisted forum links them
             self._know(ItemRef(Kind.FORUM, forum_id), 1, None)
-        indexed = self._links.load()
-        to_learn_from = sorted(
-            (ref for ref in self._store.stored_pages() if ref.kind is not Kind.THREAD or ref.page == 1),
-            key=PageRef.crawl_order,
-        )
-        missing: list[PageLinks] = []
-        for ref in to_learn_from:
-            entry = indexed.get(ref)
-            if entry is None:
-                entry = self.links_on(ref, self._store.read(ref), self.url_of(ref))
-                missing.append(entry)
-            self._learn(entry)
-        self._links.record_all(missing)
+        from_index = from_pages = 0
+        for kinds in _LEARNING_PASSES:
+            indexed = self._learn_from_index(kinds)
+            from_index += sum(pages.bit_count() for pages in indexed.values())
+            from_pages += self._learn_from_pages(kinds, indexed)
         for ref in self._store.stored_pages():  # a stored page past what any link says is known too
             if ref.kind is not Kind.INDEX and self._in_scope(ref.item, ref):
                 self._know(ref.item, ref.page, None)
@@ -103,7 +103,38 @@ class CrawlPlan:
             last = failures[-1]
             if last.reason == "redirect" and last.detail:
                 self.note_link(last.detail)  # what a redirected page pointed to
-        return Rebuilt(len(to_learn_from) - len(missing), len(missing))
+        return Rebuilt(from_index, from_pages)
+
+    def _learn_from_index(self, kinds: frozenset[Kind]) -> dict[ItemRef, int]:
+        """Learn from the index's entries for stored pages of these kinds; returns which pages it had, as a
+        bitmask per forum or thread (bit n: page n)."""
+        indexed: dict[ItemRef, int] = {}
+        for entry in self._links.entries():
+            ref = entry.page
+            if ref.kind in kinds and self._store.is_stored(ref):
+                indexed[ref.item] = indexed.get(ref.item, 0) | 1 << ref.page
+                self._learn(entry)
+        return indexed
+
+    def _learn_from_pages(self, kinds: frozenset[Kind], indexed: dict[ItemRef, int]) -> int:
+        """Read the stored pages of these kinds the index has nothing for, learn from them, and add them to
+        the index; returns how many. Recorded in batches, so a first run on a big store stays small too."""
+        batch: list[PageLinks] = []
+        read = 0
+        for ref in self._store.stored_pages():
+            if ref.kind not in kinds or (ref.kind is Kind.THREAD and ref.page != 1):
+                continue
+            if indexed.get(ref.item, 0) >> ref.page & 1:
+                continue
+            entry = self.links_on(ref, self._store.read(ref), self.url_of(ref))
+            self._learn(entry)
+            batch.append(entry)
+            read += 1
+            if len(batch) == _RECORD_BATCH:
+                self._links.record_all(batch)
+                batch = []
+        self._links.record_all(batch)
+        return read
 
     def discover(self, ref: PageRef, page_html: str, url: str) -> int:
         """Add what a stored page links to, and record it in the link index; returns how many pages that
@@ -139,7 +170,7 @@ class CrawlPlan:
 
     def seen_at(self, item: ItemRef, first_page_url: str) -> None:
         """The site just served this item from ``first_page_url``: use that URL from now on."""
-        self._first_page_urls[item] = first_page_url
+        self._first_page_paths[item] = _path(first_page_url)
 
     # -- reading it ---------------------------------------------------------------------------------
     @property
@@ -149,27 +180,32 @@ class CrawlPlan:
     def next_page(self) -> PageRef | None:
         if not self._queue:
             return None
-        _, ref = heapq.heappop(self._queue)
-        self._queued_by_stage[ref.stage] -= 1
-        return ref
+        stage, item_id, first, last = heapq.heappop(self._queue)
+        if first < last:
+            heapq.heappush(self._queue, (stage, item_id, first + 1, last))
+        self._queued_by_stage[stage] -= 1
+        return PageRef(stage.kind, item_id, first)
 
     def put_back(self, ref: PageRef) -> None:
         """Return a page taken with next_page but not attempted."""
-        self._queued.discard(ref)
-        self._want(ref)
+        self._push(ref.stage, ref.item_id, ref.page, ref.page)
 
-    def to_fetch(self) -> list[PageRef]:
-        return [ref for _, ref in sorted(self._queue)]
+    def to_fetch(self) -> Iterator[PageRef]:
+        """The pages to fetch, in the order they will be."""
+        for stage, item_id, first, last in sorted(self._queue):
+            for page in range(first, last + 1):
+                yield PageRef(stage.kind, item_id, page)
 
     def to_fetch_count(self) -> int:
-        return len(self._queue)
+        return sum(self._queued_by_stage.values())
 
     def to_fetch_in(self, stage: Stage) -> int:
         return self._queued_by_stage[stage]
 
     def listed_in(self, thread: ItemRef) -> ItemRef | None:
         """The forum whose thread list first showed the thread."""
-        return self._listed_in.get(thread)
+        forum_id = self._listed_in.get(thread.item_id) if thread.kind is Kind.THREAD else None
+        return None if forum_id is None else ItemRef(Kind.FORUM, forum_id)
 
     def title(self, forum: ItemRef) -> str | None:
         return self._titles.get(forum)
@@ -188,14 +224,11 @@ class CrawlPlan:
     def url_of(self, ref: PageRef) -> str:
         if ref.kind is Kind.INDEX:
             return self._start_url
-        first = self._first_page_urls.get(ref.item) or bare_first_page_url(
-            self._site_prefix or _with_trailing_slash(self._start_url), ref.item
-        )
-        return page_url(first, ref.page)
+        return page_url(self._first_page_url(ref.item), ref.page)
 
     def slug(self, item: ItemRef) -> str | None:
-        first = self._first_page_urls.get(item)
-        return slug_of(first) if first else None
+        path = self._first_page_paths.get(item)
+        return slug_of(self._origin + path) if path else None
 
     # -- internals ----------------------------------------------------------------------------------
     def _learn(self, entry: PageLinks) -> int:
@@ -206,7 +239,7 @@ class CrawlPlan:
             if not self._in_scope(link.item, entry.page):
                 continue
             if entry.page.kind is Kind.FORUM and link.item.kind is Kind.THREAD:
-                self._listed_in.setdefault(link.item, entry.page.item)
+                self._listed_in.setdefault(link.item.item_id, entry.page.item_id)
             added += self._know(link.item, link.last_page, self._origin + link.path)
         return added
 
@@ -227,27 +260,48 @@ class CrawlPlan:
             return None
         return link
 
+    def _first_page_url(self, item: ItemRef) -> str:
+        path = self._first_page_paths.get(item)
+        if path is not None:
+            return self._origin + path
+        return bare_first_page_url(self._site_prefix or _with_trailing_slash(self._start_url), item)
+
     def _know(self, item: ItemRef, page: int, first_page_url: str | None) -> int:
-        if first_page_url and item not in self._first_page_urls:
-            self._first_page_urls[item] = first_page_url
+        if first_page_url and item not in self._first_page_paths:
+            self._first_page_paths[item] = _path(first_page_url)
             self._site_prefix = self._site_prefix or site_prefix(first_page_url)
         last = self._last_pages.get(item, 0)
         if page <= last:
             return 0
         self._last_pages[item] = page
-        return sum(self._want(item.page(p)) for p in range(last + 1, page + 1))
+        return self._want_pages(item, last + 1, page)
 
-    def _want(self, ref: PageRef) -> int:
-        if ref in self._queued or self._store.is_stored(ref):
-            return 0
+    def _want_pages(self, item: ItemRef, first: int, last: int) -> int:
+        """Queue those of the item's pages first to last that are to fetch now, as runs; returns how many.
+        Each page is considered once: an item's pages are only ever added above its last known page."""
+        wanted = [page for page in range(first, last + 1) if self._to_fetch_now(item.page(page))]
+        consecutive = groupby(enumerate(wanted), key=lambda entry: (entry[1] - entry[0], item.page(entry[1]).stage))
+        for (_, stage), run in consecutive:
+            pages = [page for _, page in run]
+            self._push(stage, item.item_id, pages[0], pages[-1])
+        return len(wanted)
+
+    def _to_fetch_now(self, ref: PageRef) -> bool:
+        if self._store.is_stored(ref):
+            return False
         waiting_until = self._backoff.waiting_until(self._store.failures(ref))
         if waiting_until is not None:
             self._waiting[ref] = waiting_until
-            return 0
-        heapq.heappush(self._queue, (ref.crawl_order(), ref))
-        self._queued.add(ref)
-        self._queued_by_stage[ref.stage] += 1
-        return 1
+            return False
+        return True
+
+    def _push(self, stage: Stage, item_id: int, first: int, last: int) -> None:
+        heapq.heappush(self._queue, (stage, item_id, first, last))
+        self._queued_by_stage[stage] += last - first + 1
+
+
+_LEARNING_PASSES = (frozenset({Kind.INDEX, Kind.FORUM}), frozenset({Kind.THREAD}))
+_RECORD_BATCH = 5000
 
 
 def _with_trailing_slash(url: str) -> str:

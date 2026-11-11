@@ -5,7 +5,8 @@ that for any stored page the index doesn't cover (it was deleted, or the page wa
 The pages stay the source of truth.
 
 One JSON line per page the plan reads (the index, every forum page, and every thread's first page),
-appended when the page is stored. If a page is stored again, its later line wins.
+appended when the page is stored. A page stored again (after its copy was deleted) gets another line; the
+plan learns from both, which at worst queues a link the page no longer has.
 
     {"page": "forum:2:1", "title": "General", "links": [["thread", 10, 7, "/threads/a-thread.10/"], ...]}
 
@@ -14,6 +15,7 @@ path of its first page. Paths, not URLs, keep the file small; the site's address
 """
 
 import json
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,7 +23,7 @@ from xfcrawl.atomic_files import append_line, append_lines
 from xfcrawl.urls import ItemRef, Kind, PageRef
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ItemLink:
     item: ItemRef
     last_page: int
@@ -30,7 +32,7 @@ class ItemLink:
     """The path of the item's first page, such as ``/threads/a-thread.10/``."""
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PageLinks:
     page: PageRef
     title: str | None
@@ -48,17 +50,16 @@ class LinkIndex:
     def __init__(self, path: Path) -> None:
         self._path = path
 
-    def load(self) -> dict[PageRef, PageLinks]:
-        """Every page's latest entry. A line cut short by a crash is skipped; its page is read again."""
+    def entries(self) -> Iterator[PageLinks]:
+        """The entries in the order they were written, read one at a time: the file can be far bigger than
+        what is worth holding in memory. A line cut short by a crash is skipped; its page is read again."""
         if not self._path.exists():
-            return {}
-        entries: dict[PageRef, PageLinks] = {}
+            return
         with self._path.open(encoding="utf-8") as lines:
             for line in lines:
                 entry = _parse(line)
                 if entry is not None:
-                    entries[entry.page] = entry
-        return entries
+                    yield entry
 
     def record(self, entry: PageLinks) -> None:
         append_line(self._path, entry.to_json_line())
