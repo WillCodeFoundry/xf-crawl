@@ -111,11 +111,15 @@ class Crawl:
     def _loop(self, connection: Connection, summary: CrawlSummary, max_fetches: int | None) -> None:
         fetches = in_a_row = 0
         last_report = self.clock()
+        stage = None
         while (ref := self.plan.next_page()) is not None:
             if max_fetches is not None and fetches >= max_fetches:
                 self.plan.put_back(ref)
                 summary.stopped = f"reached --max-fetches {max_fetches}"
                 break
+            if ref.stage is not stage:
+                stage = ref.stage
+                _LOGGER.info("Now fetching %s: %d pages to fetch", stage.describe(), self.plan.to_fetch_count() + 1)
             url = self.plan.url_of(ref)
             if not connection.robots.allows(url):
                 self._fail(ref, url, Reject("robots", "", "blocked by robots.txt"))

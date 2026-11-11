@@ -17,7 +17,21 @@ class Kind(str, Enum):
     THREAD = "thread"
 
 
-_CRAWL_ORDER = {Kind.INDEX: 0, Kind.FORUM: 1, Kind.THREAD: 2}
+class Stage(int, Enum):
+    """The crawl goes level by level: everything of one stage before anything of the next."""
+
+    FORUM_LIST = 0
+    THREAD_LISTS = 1
+    THREAD_FIRST_PAGES = 2
+    THREAD_OTHER_PAGES = 3
+
+    def describe(self) -> str:
+        return {
+            Stage.FORUM_LIST: "the forum list",
+            Stage.THREAD_LISTS: "every forum's thread list",
+            Stage.THREAD_FIRST_PAGES: "every thread's first page",
+            Stage.THREAD_OTHER_PAGES: "the threads' other pages",
+        }[self]
 
 # .../threads/some-title.123/  .../threads/some-title.123/page-4  .../forums/123/
 # and the same in the query string when friendly URLs are off: index.php?threads/some-title.123/page-4
@@ -52,9 +66,21 @@ class PageRef:
         """How the page is named in logs and listings: ``thread:123:4``."""
         return f"{self.kind.value}:{self.item_id}:{self.page}"
 
+    @property
+    def stage(self) -> Stage:
+        if self.kind is Kind.INDEX:
+            return Stage.FORUM_LIST
+        if self.kind is Kind.FORUM:
+            return Stage.THREAD_LISTS
+        return Stage.THREAD_FIRST_PAGES if self.page == 1 else Stage.THREAD_OTHER_PAGES
+
     def crawl_order(self) -> tuple[int, int, int]:
-        """The index first, then forum listings, then threads; by number, then page."""
-        return (_CRAWL_ORDER[self.kind], self.item_id, self.page)
+        """Stage by stage (see Stage); within one, by forum or thread number, then page.
+
+        Thread pages can't link to forums, so every forum and every thread is known before the first
+        thread is fetched. Each thread's first page says how many pages it has, so the whole size of the
+        crawl is known before its last stage starts."""
+        return (self.stage, self.item_id, self.page)
 
 
 INDEX_PAGE = PageRef(Kind.INDEX, 0, 1)
