@@ -5,3 +5,4 @@ dist/
 .crawl-store/
 .pytest_cache/
 .ruff_cache/
+.coverage
