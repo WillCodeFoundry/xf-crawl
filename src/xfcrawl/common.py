@@ -327,9 +327,10 @@ def old_layout():
         return ".crawl-store/errors.jsonl from an earlier version"
     threads = os.path.join(PAGES_DIR, "threads")
     if os.path.isdir(threads):
-        for d in os.scandir(threads):
-            if d.name.startswith("_moving."):
-                return "an unfinished migration"
+        entries = list(os.scandir(threads))     # check all of them: listing order varies by filesystem
+        if any(d.name.startswith("_moving.") for d in entries):
+            return "an unfinished migration"
+        for d in entries:
             if d.is_dir() and d.name.isdigit():
                 first = next(os.scandir(d.path), None)
                 if first is not None and first.is_file():
