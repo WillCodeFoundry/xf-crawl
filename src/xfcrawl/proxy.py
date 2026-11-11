@@ -4,6 +4,7 @@ With a proxy set, a crawl must never reach the forum directly. ``proxied_session
 the only way out: it ignores the proxy environment variables, and always verifies the proxy's certificate.
 """
 
+import re
 import ssl
 from typing import Any, Protocol
 
@@ -17,6 +18,17 @@ Proxies = dict[str, str]
 
 class ProxyDown(XfError):
     """The proxy can't be used; nothing was sent to the site."""
+
+
+_AUTH_REFUSED = re.compile(r"\b407 Proxy Authentication Required\b")
+
+
+def refused_credentials(error: object) -> bool:
+    """Whether a proxy error is the proxy refusing its credentials (HTTP 407), which a fresh token may fix.
+
+    Matched on the status line, not on "407" alone: an error's text also holds addresses, and a port such
+    as :40701 would look like a refusal."""
+    return _AUTH_REFUSED.search(str(error)) is not None
 
 
 class ProxyRoute(Protocol):
