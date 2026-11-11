@@ -11,7 +11,7 @@ from collections.abc import Callable
 
 import requests
 
-from xfcrawl.proxy import Proxies, ProxyDown
+from xfcrawl.proxy import Proxies, ProxyDown, refused_credentials
 from xfcrawl.tunnelbear.account import TunnelBearAccount, TunnelBearError
 
 _RENEW_EVERY_SECONDS = 300.0
@@ -92,7 +92,7 @@ def fetch_through(rotation: ServerRotation, session: requests.Session, url: str)
         except (requests.exceptions.ProxyError, requests.exceptions.SSLError,
                 requests.exceptions.ConnectTimeout) as error:
             last_error = error
-            rotation.failed(auth_problem="407" in str(error))
+            rotation.failed(auth_problem=refused_credentials(error))
             continue
         if response.status_code != 407:  # a plain-http target gets the proxy's 407 as a response
             return response

@@ -10,10 +10,10 @@ import sys
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 
-from xfcrawl.commands import crawl, migrate, mine, pending, tunnelbear
+from xfcrawl.commands import crawl, migrate, mine, pending, status, tunnelbear
 from xfcrawl.errors import XfError
 
-COMMANDS = (crawl, pending, mine, migrate, tunnelbear)
+COMMANDS = (crawl, status, pending, mine, migrate, tunnelbear)
 _LOGGER = logging.getLogger("xfcrawl")
 _INTERRUPTED = 130
 

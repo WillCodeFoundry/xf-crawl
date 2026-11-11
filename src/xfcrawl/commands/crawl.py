@@ -19,9 +19,10 @@ from xfcrawl.commands.tunnelbear import ask_for_credentials, open_account
 from xfcrawl.config import CrawlConfig, ProxySetting, TunnelBearProxy, UrlProxy
 from xfcrawl.crawler import Connection, Crawl, CrawlSummary, connect
 from xfcrawl.errors import XfError
-from xfcrawl.failures import RetryPolicy
-from xfcrawl.fetching import USER_AGENT, Pacing, PoliteFetcher
+from xfcrawl.failures import Backoff, RetryPolicy
+from xfcrawl.fetching import DEFAULT_DELAY, DEFAULT_JITTER, USER_AGENT, Pacing, PoliteFetcher
 from xfcrawl.layout import StoreLayout
+from xfcrawl.link_index import LinkIndex
 from xfcrawl.plan import CrawlPlan
 from xfcrawl.proxy import FixedProxy, ProxyRoute, proxied_session
 from xfcrawl.store import PageStore
@@ -44,8 +45,10 @@ def add_parser(subparsers: "argparse._SubParsersAction[argparse.ArgumentParser]"
         ),
     )
     parser.add_argument("url", nargs="?", help="the forum's home page; only on the first run, it is remembered")
-    parser.add_argument("--delay", type=float, default=1.0, help="seconds between requests (default 1.0)")
-    parser.add_argument("--jitter", type=float, default=0.5, help="up to this many extra seconds (default 0.5)")
+    parser.add_argument("--delay", type=float, default=DEFAULT_DELAY,
+                        help=f"seconds between requests (default {DEFAULT_DELAY})")
+    parser.add_argument("--jitter", type=float, default=DEFAULT_JITTER,
+                        help=f"up to this many extra seconds (default {DEFAULT_JITTER})")
     parser.add_argument("--max-fetches", type=int, metavar="N", help="stop after N requests")
     parser.add_argument("--retry-failed", action="store_true", help="retry failed pages now, without waiting")
     parser.add_argument("--cookie", help="a Cookie header, to crawl as a logged-in user")
@@ -65,9 +68,11 @@ def main(args: argparse.Namespace) -> int:
     layout = StoreLayout.in_directory(directory)
     crawl_config = settle_config(layout, args.url, requested_proxy_change(args))
     store = PageStore.open(layout)
-    plan = CrawlPlan(crawl_config.start_url, store, RetryPolicy(), _now(), ignore_backoff=args.retry_failed)
-    read = plan.rebuild()
-    _LOGGER.info("%s pages stored; read %s of them for what is still to fetch", store.stored_count(), read)
+    backoff = Backoff(RetryPolicy(), _now(), ignore=args.retry_failed)
+    plan = CrawlPlan(crawl_config.start_url, store, LinkIndex(layout.link_index), backoff)
+    rebuilt = plan.rebuild()
+    _LOGGER.info("%s pages stored; links of %s from the link index, %s read from the pages", store.stored_count(),
+                 rebuilt.from_index, rebuilt.from_pages)
     credentials = ask_for_credentials(os.environ, interactive=sys.stdin.isatty())
     open_connection = partial(connect_to_site, crawl_config, layout, args, os.environ, credentials)
     summary = Crawl(plan, store, open_connection, _now, time.monotonic).run(max_fetches=args.max_fetches)

@@ -9,6 +9,8 @@ import re
 
 _HREF = re.compile(r'href="([^"]+)"')
 _TEMPLATE = re.compile(r'<html\b[^>]*\bdata-template="([^"]*)"', re.IGNORECASE)
+_TITLE = re.compile(r'<h1 class="p-title-value">(.*?)</h1>', re.DOTALL)
+_TAG = re.compile(r"<[^>]+>")
 _TEMPLATE_WITHIN = 5000  # the <html> tag is at the top
 _END_WITHIN = 2000       # and </html> at the bottom
 
@@ -24,6 +26,14 @@ def template(page_html: str) -> str | None:
     """XenForo's name for the page's template, from ``<html data-template="thread_view">``."""
     match = _TEMPLATE.search(page_html[:_TEMPLATE_WITHIN])
     return match.group(1) if match else None
+
+
+def title(page_html: str) -> str | None:
+    """The page's heading: a forum's or thread's title."""
+    match = _TITLE.search(page_html)
+    if match is None:
+        return None
+    return " ".join(html.unescape(_TAG.sub(" ", match.group(1))).split()) or None
 
 
 def is_complete(page_html: str) -> bool:

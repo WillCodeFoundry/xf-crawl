@@ -65,3 +65,11 @@ def test_crawl_order_is_index_then_forums_then_threads():
 
 def test_page_keys():
     assert ItemRef(Kind.THREAD, 12).page(3).key == "thread:12:3"
+
+
+def test_a_page_title_is_read_without_its_markup():
+    from xfcrawl import xenforo
+
+    assert xenforo.title('<h1 class="p-title-value"><span class="label">Q</span> Fran&ccedil;ais\n seulement</h1>') \
+        == "Q Français seulement"
+    assert xenforo.title("<h1>no class</h1>") is None

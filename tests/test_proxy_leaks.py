@@ -12,9 +12,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from xfcrawl.crawler import Crawl, connect
-from xfcrawl.failures import RetryPolicy
+from xfcrawl.failures import Backoff, RetryPolicy
 from xfcrawl.fetching import Pacing, PoliteFetcher
 from xfcrawl.layout import StoreLayout
+from xfcrawl.link_index import LinkIndex
 from xfcrawl.plan import CrawlPlan
 from xfcrawl.proxy import proxied_session
 from xfcrawl.store import PageStore
@@ -94,7 +95,7 @@ def test_a_token_renewal_failing_mid_crawl_stops_it(forum, tunnelbear):
     account.login(Credentials(os.environ["TB_USER"], os.environ["TB_PASS"]), mfa_code=None)
     rotation = ServerRotation(account, "FR", renew_every=0)   # renew before every request
     store = PageStore.open(layout)
-    plan = CrawlPlan(forum.url, store, RetryPolicy(), datetime.now(timezone.utc))
+    plan = CrawlPlan(forum.url, store, LinkIndex(layout.link_index), Backoff(RetryPolicy(), datetime.now(timezone.utc)))
     plan.rebuild()
     fetcher = PoliteFetcher(proxied_session(os.environ["REQUESTS_CA_BUNDLE"]), Pacing(0, 0), rotation)
 

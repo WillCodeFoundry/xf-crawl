@@ -103,6 +103,7 @@ def test_a_link_past_a_threads_end_is_recorded_as_a_redirect(forum, xf):
     html = gzip.decompress(page.read_bytes()).decode()
     page.write_bytes(gzip.compress(html.replace("</body>", '<a href="/threads/thread-12.12/page-5">x</a></body>')
                                    .encode()))
+    (STORE / "links.jsonl").unlink()                  # the index still says what the page said before the edit
     assert "redirected to" in xf("crawl").err
     assert reasons(THREADS / "thread-12.12" / "page-0003.failed.jsonl") == ["redirect"]
     assert not (THREADS / "thread-12.12" / "page-0003.html.gz").exists()
@@ -143,3 +144,10 @@ def test_robots_txt_is_obeyed(forum, xf):
     assert forum.count("/threads/thread-11.11/") == 0
     assert reasons(THREADS / "thread-11.11" / "page-0001.failed.jsonl") == ["robots"]
     assert "blocked by robots.txt" in result.err
+
+
+def test_a_second_run_plans_from_the_link_index(forum, xf):
+    xf("crawl", forum.url)
+    assert "links of 11 from the link index, 0 read from the pages" in xf("crawl").err
+    (STORE / "links.jsonl").unlink()
+    assert "links of 0 from the link index, 11 read from the pages" in xf("crawl").err

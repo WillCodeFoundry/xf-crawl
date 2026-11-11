@@ -6,8 +6,9 @@ from datetime import datetime
 from xfcrawl import config
 from xfcrawl.config import CrawlConfig
 from xfcrawl.errors import XfError
-from xfcrawl.failures import RetryPolicy
+from xfcrawl.failures import Backoff, RetryPolicy
 from xfcrawl.layout import StoreLayout
+from xfcrawl.link_index import LinkIndex
 from xfcrawl.plan import CrawlPlan
 from xfcrawl.store import PageStore
 
@@ -25,6 +26,6 @@ def open_stored_crawl(layout: StoreLayout, now: datetime) -> StoredCrawl:
     if crawl_config is None:
         raise XfError(f"no crawl in {layout.root}; start one with: uv run xf crawl URL")
     store = PageStore.open(layout)
-    plan = CrawlPlan(crawl_config.start_url, store, RetryPolicy(), now)
+    plan = CrawlPlan(crawl_config.start_url, store, LinkIndex(layout.link_index), Backoff(RetryPolicy(), now))
     plan.rebuild()
     return StoredCrawl(crawl_config, store, plan)

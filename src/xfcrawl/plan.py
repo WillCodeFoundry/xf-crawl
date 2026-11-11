@@ -9,14 +9,20 @@ There is no queue on disk. Each run rebuilds the plan from the store:
 
 A wanted page that is neither stored nor waiting out its retry back-off is to fetch. Fetching a page can
 reveal more (``discover``), so the plan grows as the crawl goes.
+
+What each page links to is kept in the LinkIndex as the page is stored, so a rebuild reads the index rather
+than the pages, and reads a page only when the index has nothing for it.
 """
 
 import heapq
+from collections import Counter
+from dataclasses import dataclass, replace
 from datetime import datetime
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, urlsplit
 
 from xfcrawl import xenforo
-from xfcrawl.failures import RetryPolicy
+from xfcrawl.failures import Backoff, RetryPolicy
+from xfcrawl.link_index import ItemLink, LinkIndex, PageLinks
 from xfcrawl.store import PageStore
 from xfcrawl.urls import (
     INDEX_PAGE,
@@ -24,6 +30,7 @@ from xfcrawl.urls import (
     Kind,
     PageLink,
     PageRef,
+    Stage,
     bare_first_page_url,
     page_url,
     parse_page_url,
@@ -32,57 +39,83 @@ from xfcrawl.urls import (
 )
 
 
+@dataclass(frozen=True)
+class Rebuilt:
+    from_index: int
+    """Stored pages whose links came from the link index."""
+    from_pages: int
+    """Stored pages read because the index had nothing for them."""
+
+
 class CrawlPlan:
-    def __init__(
-        self, start_url: str, store: PageStore, retry: RetryPolicy, now: datetime, *, ignore_backoff: bool = False
-    ) -> None:
+    def __init__(self, start_url: str, store: PageStore, links: LinkIndex, backoff: Backoff) -> None:
         self._start_url = start_url
-        self._host = urlparse(start_url).netloc
+        site = urlparse(start_url)
+        self._host = site.netloc
+        self._origin = f"{site.scheme}://{site.netloc}"
         self._store = store
-        self._retry = retry
-        self._now = now
-        self._ignore_backoff = ignore_backoff
+        self._links = links
+        self._backoff = backoff
         self._first_page_urls: dict[ItemRef, str] = {}
         self._last_pages: dict[ItemRef, int] = {}
         self._queue: list[tuple[tuple[int, int, int], PageRef]] = []
         self._queued: set[PageRef] = set()
         self._waiting: dict[PageRef, datetime] = {}
         self._site_prefix: str | None = None
+        self._queued_by_stage: Counter[Stage] = Counter()
+        self._listed_in: dict[ItemRef, ItemRef] = {}
+        self._titles: dict[ItemRef, str] = {}
 
     # -- building it --------------------------------------------------------------------------------
-    def rebuild(self) -> int:
-        """Work out the plan from the store; returns how many stored pages it read to do so."""
+    def rebuild(self) -> Rebuilt:
+        """Work out the plan from the store and the link index."""
         self._want(INDEX_PAGE)
         for ref in self._store.stored_pages():
             if ref.kind is not Kind.INDEX:
                 self._know(ref.item, ref.page, None)
-        to_read = sorted(
+        indexed = self._links.load()
+        to_learn_from = sorted(
             (ref for ref in self._store.stored_pages() if ref.kind is not Kind.THREAD or ref.page == 1),
             key=PageRef.crawl_order,
         )
-        for ref in to_read:
-            self.discover(ref, self._store.read(ref), self.url_of(ref))
+        missing: list[PageLinks] = []
+        for ref in to_learn_from:
+            entry = indexed.get(ref)
+            if entry is None:
+                entry = self.links_on(ref, self._store.read(ref), self.url_of(ref))
+                missing.append(entry)
+            self._learn(entry)
+        self._links.record_all(missing)
         for failures in self._store.failing_pages().values():
             last = failures[-1]
             if last.reason == "redirect" and last.detail:
                 self.note_link(last.detail)  # what a redirected page pointed to
-        return len(to_read)
+        return Rebuilt(len(to_learn_from) - len(missing), len(missing))
 
     def discover(self, ref: PageRef, page_html: str, url: str) -> int:
-        """Add what a page links to; returns how many pages that added to fetch.
-
-        Everything on the index and forum pages counts. On a thread, only page 1's links to the
-        thread's own pages do: its page navigation.
-        """
+        """Add what a stored page links to, and record it in the link index; returns how many pages that
+        added to fetch. A thread's later pages add nothing: its first page's navigation already did."""
         if ref.kind is Kind.THREAD and ref.page != 1:
             return 0
-        added = 0
+        entry = self.links_on(ref, page_html, url)
+        self._links.record(entry)
+        return self._learn(entry)
+
+    def links_on(self, ref: PageRef, page_html: str, url: str) -> PageLinks:
+        """What counts on a page: everything on the index and forum pages; on a thread's first page, only
+        its links to its own pages (its page navigation). Grouped by forum or thread."""
+        grouped: dict[ItemRef, ItemLink] = {}
         for href in xenforo.links(page_html):
             link = self._on_this_site(urljoin(url, href))
             if link is None or (ref.kind is Kind.THREAD and link.ref.item != ref.item):
                 continue
-            added += self._know(link.ref.item, link.ref.page, link.first_page_url)
-        return added
+            known = grouped.get(link.ref.item)
+            if known is None:
+                grouped[link.ref.item] = ItemLink(link.ref.item, link.ref.page, _path(link.first_page_url))
+            elif link.ref.page > known.last_page:
+                grouped[link.ref.item] = replace(known, last_page=link.ref.page)
+        title = xenforo.title(page_html) if ref.kind is Kind.FORUM and ref.page == 1 else None
+        return PageLinks(ref, title, tuple(grouped.values()))
 
     def note_link(self, url: str) -> int:
         link = self._on_this_site(url)
@@ -95,12 +128,13 @@ class CrawlPlan:
     # -- reading it ---------------------------------------------------------------------------------
     @property
     def retry_policy(self) -> RetryPolicy:
-        return self._retry
+        return self._backoff.policy
 
     def next_page(self) -> PageRef | None:
         if not self._queue:
             return None
         _, ref = heapq.heappop(self._queue)
+        self._queued_by_stage[ref.stage] -= 1
         return ref
 
     def put_back(self, ref: PageRef) -> None:
@@ -113,6 +147,19 @@ class CrawlPlan:
 
     def to_fetch_count(self) -> int:
         return len(self._queue)
+
+    def to_fetch_in(self, stage: Stage) -> int:
+        return self._queued_by_stage[stage]
+
+    def listed_in(self, thread: ItemRef) -> ItemRef | None:
+        """The forum whose thread list first showed the thread."""
+        return self._listed_in.get(thread)
+
+    def title(self, forum: ItemRef) -> str | None:
+        return self._titles.get(forum)
+
+    def is_stored(self, ref: PageRef) -> bool:
+        return self._store.is_stored(ref)
 
     def waiting(self) -> dict[PageRef, datetime]:
         """Pages that failed and wait out their back-off, with when each may be tried again."""
@@ -135,6 +182,16 @@ class CrawlPlan:
         return slug_of(first) if first else None
 
     # -- internals ----------------------------------------------------------------------------------
+    def _learn(self, entry: PageLinks) -> int:
+        if entry.title:
+            self._titles[entry.page.item] = entry.title
+        added = 0
+        for link in entry.links:
+            if entry.page.kind is Kind.FORUM and link.item.kind is Kind.THREAD:
+                self._listed_in.setdefault(link.item, entry.page.item)
+            added += self._know(link.item, link.last_page, self._origin + link.path)
+        return added
+
     def _on_this_site(self, url: str) -> PageLink | None:
         link = parse_page_url(url)
         if link is None or urlparse(link.first_page_url).netloc != self._host:
@@ -154,12 +211,18 @@ class CrawlPlan:
     def _want(self, ref: PageRef) -> int:
         if ref in self._queued or self._store.is_stored(ref):
             return 0
-        failures = self._store.failures(ref)
-        if failures and not self._ignore_backoff:
-            next_try = self._retry.next_try(failures)
-            if self._now < next_try:
-                self._waiting[ref] = next_try
-                return 0
+        waiting_until = self._backoff.waiting_until(self._store.failures(ref))
+        if waiting_until is not None:
+            self._waiting[ref] = waiting_until
+            return 0
         heapq.heappush(self._queue, (ref.crawl_order(), ref))
         self._queued.add(ref)
+        self._queued_by_stage[ref.stage] += 1
         return 1
+
+
+def _path(url: str) -> str:
+    """A URL without its scheme and host: the path, and the query (which holds the route when XenForo's
+    friendly URLs are off)."""
+    parts = urlsplit(url)
+    return parts.path + (f"?{parts.query}" if parts.query else "")

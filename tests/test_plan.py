@@ -1,11 +1,12 @@
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from xfcrawl.failures import Failure, RetryPolicy
+from xfcrawl.failures import Backoff, Failure, RetryPolicy
 from xfcrawl.layout import StoreLayout
+from xfcrawl.link_index import LinkIndex
 from xfcrawl.plan import CrawlPlan
 from xfcrawl.store import PageStore
-from xfcrawl.urls import INDEX_PAGE, ItemRef, Kind
+from xfcrawl.urls import INDEX_PAGE, ItemRef, Kind, Stage
 
 SITE = "http://forum.example/"
 NOW = datetime(2026, 11, 9, 16, 0, tzinfo=timezone.utc)
@@ -17,7 +18,8 @@ def page(*links: str) -> str:
 
 
 def plan_for(store: PageStore, now: datetime = NOW, *, ignore_backoff: bool = False) -> CrawlPlan:
-    plan = CrawlPlan(SITE, store, RetryPolicy(), now, ignore_backoff=ignore_backoff)
+    backoff = Backoff(RetryPolicy(), now, ignore=ignore_backoff)
+    plan = CrawlPlan(SITE, store, LinkIndex(Path(".crawl-store/links.jsonl")), backoff)
     plan.rebuild()
     return plan
 
@@ -88,3 +90,39 @@ def test_put_back_returns_a_page_to_the_front():
     assert ref == INDEX_PAGE
     plan.put_back(ref)
     assert plan.to_fetch() == [INDEX_PAGE]
+
+
+def test_a_rebuild_reads_the_index_not_the_pages():
+    store = new_store()
+    store.save(INDEX_PAGE, page("/forums/f.2/"), None)
+    store.save(ItemRef(Kind.FORUM, 2).page(1), '<html><h1 class="p-title-value">General</h1></html>'
+               + page("/threads/t.10/", "/threads/t.10/page-3"), "f")
+    first = plan_for(store)                                          # reads the pages, and writes the index
+    assert (first_rebuild := CrawlPlan(SITE, store, LinkIndex(Path(".crawl-store/links.jsonl")),
+                                       Backoff(RetryPolicy(), NOW)).rebuild()).from_index == 2
+    assert first_rebuild.from_pages == 0
+    for path in Path(".crawl-store/pages").rglob("*.html.gz"):       # the pages can't be read any more...
+        path.write_bytes(b"not gzip")
+    again = plan_for(store)                                           # ...and aren't needed
+    assert again.to_fetch() == first.to_fetch()
+    assert again.listed_in(THREAD) == ItemRef(Kind.FORUM, 2)
+    assert again.title(ItemRef(Kind.FORUM, 2)) == "General"
+
+
+def test_without_the_index_the_pages_are_read_and_it_is_written_again():
+    store = new_store()
+    store.save(INDEX_PAGE, page("/threads/t.10/"), None)
+    plan_for(store)
+    Path(".crawl-store/links.jsonl").unlink()
+    rebuilt = CrawlPlan(SITE, store, LinkIndex(Path(".crawl-store/links.jsonl")), Backoff(RetryPolicy(), NOW)).rebuild()
+    assert (rebuilt.from_index, rebuilt.from_pages) == (0, 1)
+    assert Path(".crawl-store/links.jsonl").exists()
+
+
+def test_pages_left_are_counted_by_stage():
+    store = new_store()
+    store.save(INDEX_PAGE, page("/forums/f.2/", "/threads/t.10/page-3", "/threads/u.11/"), None)
+    plan = plan_for(store)
+    assert [plan.to_fetch_in(stage) for stage in Stage] == [0, 1, 2, 2]
+    plan.next_page()
+    assert plan.to_fetch_in(Stage.THREAD_LISTS) == 0

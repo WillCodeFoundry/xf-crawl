@@ -2,6 +2,7 @@
 
     .crawl-store/
       config.json                                   CrawlConfig
+      links.jsonl                                   LinkIndex: what each page links to (a shortcut)
       tunnelbear.json                               TunnelBear login tokens, when used
       pages/index.html.gz
       pages/forums/<slug>.<id>/page-0001.html.gz
@@ -66,6 +67,10 @@ class StoreLayout:
     @property
     def config_file(self) -> Path:
         return self.root / "config.json"
+
+    @property
+    def link_index(self) -> Path:
+        return self.root / "links.jsonl"
 
     @property
     def tunnelbear_tokens(self) -> Path:

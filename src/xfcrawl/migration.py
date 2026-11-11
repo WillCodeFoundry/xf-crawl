@@ -20,8 +20,9 @@ from pathlib import Path
 
 from xfcrawl import config
 from xfcrawl.errors import XfError
-from xfcrawl.failures import Failure, RetryPolicy
+from xfcrawl.failures import Backoff, Failure, RetryPolicy
 from xfcrawl.layout import STORE_DIR_NAME, ItemDirName, StoreLayout
+from xfcrawl.link_index import LinkIndex
 from xfcrawl.plan import CrawlPlan
 from xfcrawl.store import PageStore, merge_dirs
 from xfcrawl.urls import INDEX_PAGE, ItemRef, Kind, PageRef
@@ -168,7 +169,8 @@ def _name_folders(layout: StoreLayout, store: PageStore) -> int:
     loaded = config.load(layout)
     if loaded is None:
         return 0
-    plan = CrawlPlan(loaded.start_url, store, RetryPolicy(), datetime.now(timezone.utc), ignore_backoff=True)
+    backoff = Backoff(RetryPolicy(), datetime.now(timezone.utc), ignore=True)
+    plan = CrawlPlan(loaded.start_url, store, LinkIndex(layout.link_index), backoff)
     plan.rebuild()
     named = 0
     for item in plan.known_items():
