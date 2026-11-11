@@ -1,7 +1,8 @@
-"""CrawlConfig: what a crawl store remembers between runs: the start URL, and the proxy to go through."""
+"""CrawlConfig: what a crawl store remembers between runs: the start URL, the proxy to go through, and the
+forums to keep to."""
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
 from xfcrawl.atomic_files import atomic_write
@@ -28,13 +29,18 @@ class CrawlConfig:
     start_url: str
     created_at: str
     proxy: ProxySetting | None = None
+    only_forums: frozenset[int] | None = None
+    """The forums to crawl, by number; None for all of them."""
 
     @classmethod
     def new(cls, start_url: str) -> "CrawlConfig":
         return cls(start_url, datetime.now(timezone.utc).replace(microsecond=0).isoformat())
 
     def with_proxy(self, proxy: ProxySetting | None) -> "CrawlConfig":
-        return CrawlConfig(self.start_url, self.created_at, proxy)
+        return replace(self, proxy=proxy)
+
+    def with_only_forums(self, forums: frozenset[int] | None) -> "CrawlConfig":
+        return replace(self, only_forums=forums)
 
 
 def load(layout: StoreLayout) -> CrawlConfig | None:
@@ -43,13 +49,17 @@ def load(layout: StoreLayout) -> CrawlConfig | None:
     if not layout.config_file.exists():
         return None
     data = json.loads(layout.config_file.read_text(encoding="utf-8"))
-    return CrawlConfig(data["start_url"], data.get("created_at", ""), _proxy_from_json(data.get("proxy")))
+    forums = data.get("only_forums")
+    return CrawlConfig(data["start_url"], data.get("created_at", ""), _proxy_from_json(data.get("proxy")),
+                       frozenset(int(forum) for forum in forums) if forums is not None else None)
 
 
 def save(layout: StoreLayout, config: CrawlConfig) -> None:
     data: dict[str, object] = {"start_url": config.start_url, "created_at": config.created_at}
     if config.proxy is not None:
         data["proxy"] = _proxy_to_json(config.proxy)
+    if config.only_forums is not None:
+        data["only_forums"] = sorted(config.only_forums)
     atomic_write(layout.config_file, (json.dumps(data, indent=2) + "\n").encode("utf-8"))
 
 

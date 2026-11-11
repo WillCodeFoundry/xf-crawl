@@ -40,18 +40,21 @@ def main(args: argparse.Namespace) -> int:
     crawl = open_stored_crawl(StoreLayout.in_directory(directory), datetime.now(timezone.utc))
     result = progress.compute(crawl.config.start_url, crawl.store, crawl.plan, args.seconds_per_page)
     waiting = len(crawl.plan.waiting())
+    only = crawl.config.only_forums
     if args.json:
-        print(json.dumps({**result.to_json(), "waiting_for_retry": waiting}, indent=2, ensure_ascii=False))
+        extra = {"waiting_for_retry": waiting, "only_forums": sorted(only) if only is not None else None}
+        print(json.dumps({**result.to_json(), **extra}, indent=2, ensure_ascii=False))
     else:
-        print("\n".join(report(result, waiting, forums=args.forums)))
+        print("\n".join(report(result, waiting, forums=args.forums, only_forums=only)))
     return 0
 
 
-def report(result: Progress, waiting: int, *, forums: bool) -> list[str]:
+def report(result: Progress, waiting: int, *, forums: bool, only_forums: frozenset[int] | None = None) -> list[str]:
     labels = [f"{n}  {s.stage.describe()}" + (f" ({_STAGE_NOTES[s.stage]})" if s.stage in _STAGE_NOTES else "")
               for n, s in enumerate(result.stages, 1)]
     width = max(len(label) for label in labels)
-    lines = [f"Crawl of {result.start_url}", "",
+    scope = "" if only_forums is None else f", only forums {', '.join(map(str, sorted(only_forums)))}"
+    lines = [f"Crawl of {result.start_url}{scope}", "",
              f"  {'Stage':<{width}}{'Stored':>12}{'Known':>12}{'Done':>7}{'Failed':>9}{'To fetch':>11}"]
     for label, stage in zip(labels, result.stages, strict=True):
         lines.append(f"  {label:<{width}}{stage.stored:>12,}{stage.known:>12,}"
@@ -72,9 +75,11 @@ def report(result: Progress, waiting: int, *, forums: bool) -> list[str]:
 
 def forum_lines(result: Progress) -> list[str]:
     width = max(len(forum.title) for forum in result.forums)
-    lines = [f"  {'Forum':<{width}}{'Threads':>11}{'Opened':>9}{'Pages stored':>15}{'of known':>11}{'Done':>7}"]
+    lines = [f"  {'Number':>7}  {'Forum':<{width}}{'Threads':>11}{'Opened':>9}{'Pages stored':>15}{'of known':>11}"
+             f"{'Done':>7}"]
     for f in result.forums:
-        lines.append(f"  {f.title:<{width}}{f.threads:>11,}{_percent(f.first_pages_stored, f.threads):>9}"
+        opened = _percent(f.first_pages_stored, f.threads)
+        lines.append(f"  {f.forum_id:>7}  {f.title:<{width}}{f.threads:>11,}{opened:>9}"
                      f"{f.thread_pages_stored:>15,}{f.thread_pages_known:>11,}"
                      f"{_percent(f.thread_pages_stored, f.thread_pages_known):>7}")
     return lines

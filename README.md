@@ -29,7 +29,16 @@ uv run xf mine                              # statistics (--json for JSON)
 - **Polite:** about 1 to 1.5 seconds between requests (`--delay`, `--jitter`), robots.txt obeyed (`--ignore-robots` not to), and waits and retries when the site is busy.
 - **Failures:** a page that can't be fetched is never stored. Its failures are recorded beside it and retried on later runs, waiting longer after each one: 1h, 2h, 4h… for temporary errors, 1d, 2d… for pages that look gone. `--retry-failed` tries them now.
 
-### More than one forum
+### Only some forums
+
+```bash
+uv run xf crawl https://forum.example/ --only-forums 46,47   # remembered for later runs
+uv run xf crawl --all-forums                                  # back to every forum
+```
+
+Only those forums' thread lists are fetched, and only the threads they list. A forum's number is the one in its URL: `/forums/french-english.46/` is forum 46; `xf status --forums` lists them too. Sub-forums are not included: list their numbers as well. Pages already stored from other forums stay on disk, left out of the crawl and of `xf status`.
+
+### More than one forum site
 
 `.crawl-store/` is created in the directory you run from, so keep one directory per forum and point uv at this folder:
 

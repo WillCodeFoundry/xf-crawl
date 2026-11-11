@@ -58,6 +58,11 @@ def add_parser(subparsers: "argparse._SubParsersAction[argparse.ArgumentParser]"
                        help="go through TunnelBear, in COUNTRY (e.g. FR) or the closest region; remembered")
     route.add_argument("--proxy", metavar="URL", help="go through this HTTP(S) proxy; remembered")
     route.add_argument("--direct", action="store_true", help="stop going through a remembered proxy")
+    forums = parser.add_mutually_exclusive_group()
+    forums.add_argument("--only-forums", type=forum_numbers, metavar="IDS",
+                        help="crawl only these forums, by number, e.g. 46,47 (the number in a forum's URL, as in "
+                             "/forums/french-english.46/); sub-forums are not included; remembered")
+    forums.add_argument("--all-forums", action="store_true", help="crawl every forum again, after --only-forums")
     parser.set_defaults(func=main)
 
 
@@ -66,10 +71,10 @@ def main(args: argparse.Namespace) -> int:
     directory = Path.cwd()
     migration.refuse_old_layout(directory)
     layout = StoreLayout.in_directory(directory)
-    crawl_config = settle_config(layout, args.url, requested_proxy_change(args))
+    crawl_config = settle_config(layout, args.url, requested_proxy_change(args), requested_forums_change(args))
     store = PageStore.open(layout)
     backoff = Backoff(RetryPolicy(), _now(), ignore=args.retry_failed)
-    plan = CrawlPlan(crawl_config.start_url, store, LinkIndex(layout.link_index), backoff)
+    plan = CrawlPlan(crawl_config.start_url, store, LinkIndex(layout.link_index), backoff, crawl_config.only_forums)
     rebuilt = plan.rebuild()
     _LOGGER.info("%s pages stored; links of %s from the link index, %s read from the pages", store.stored_count(),
                  rebuilt.from_index, rebuilt.from_pages)
@@ -95,8 +100,33 @@ def requested_proxy_change(args: argparse.Namespace) -> ProxyChange | None:
     return ProxyChange(None) if args.direct else None
 
 
-def settle_config(layout: StoreLayout, url: str | None, change: ProxyChange | None) -> CrawlConfig:
-    """The crawl's config: the one here, or a new one for ``url``, with ``change`` applied and saved."""
+@dataclass(frozen=True)
+class ForumsChange:
+    only_forums: frozenset[int] | None
+    """The forums to keep to from now on; None for all of them."""
+
+
+def forum_numbers(text: str) -> frozenset[int]:
+    """``46,47`` -> {46, 47}: the argument of --only-forums."""
+    try:
+        numbers = frozenset(int(part) for part in text.replace(" ", "").split(",") if part)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r}: give forum numbers separated by commas, e.g. 46,47") from None
+    if not numbers:
+        raise argparse.ArgumentTypeError("give at least one forum number")
+    return numbers
+
+
+def requested_forums_change(args: argparse.Namespace) -> ForumsChange | None:
+    if args.only_forums is not None:
+        return ForumsChange(args.only_forums)
+    return ForumsChange(None) if args.all_forums else None
+
+
+def settle_config(
+    layout: StoreLayout, url: str | None, change: ProxyChange | None, forums: ForumsChange | None = None
+) -> CrawlConfig:
+    """The crawl's config: the one here, or a new one for ``url``, with the changes applied and saved."""
     existing = config.load(layout)
     if existing is None and url is None:
         raise XfError(f"no crawl in {layout.root} yet; give the forum's URL")
@@ -107,11 +137,15 @@ def settle_config(layout: StoreLayout, url: str | None, change: ProxyChange | No
     settled = existing or CrawlConfig.new(str(url))
     if change is not None:
         settled = settled.with_proxy(change.proxy)
+    if forums is not None:
+        settled = settled.with_only_forums(forums.only_forums)
     if settled != existing:
         config.save(layout, settled)
     _LOGGER.info("%s %s", "Crawl of" if existing else "New crawl of", settled.start_url)
     if settled.proxy is not None:
         _LOGGER.info("Route: %s; --direct to stop", config.describe(settled.proxy))
+    if settled.only_forums is not None:
+        _LOGGER.info("Only forums %s; --all-forums for every forum", ", ".join(map(str, sorted(settled.only_forums))))
     return settled
 
 

@@ -12,6 +12,9 @@ reveal more (``discover``), so the plan grows as the crawl goes.
 
 What each page links to is kept in the LinkIndex as the page is stored, so a rebuild reads the index rather
 than the pages, and reads a page only when the index has nothing for it.
+
+With ``only_forums``, the plan keeps to those forums: only their thread lists, and only the threads they list.
+Other forums and threads are left out, even when already stored: they stay on disk, outside the plan.
 """
 
 import heapq
@@ -48,13 +51,21 @@ class Rebuilt:
 
 
 class CrawlPlan:
-    def __init__(self, start_url: str, store: PageStore, links: LinkIndex, backoff: Backoff) -> None:
+    def __init__(
+        self,
+        start_url: str,
+        store: PageStore,
+        links: LinkIndex,
+        backoff: Backoff,
+        only_forums: frozenset[int] | None = None,
+    ) -> None:
         self._start_url = start_url
         site = urlparse(start_url)
         self._host = site.netloc
         self._origin = f"{site.scheme}://{site.netloc}"
         self._store = store
         self._links = links
+        self._only_forums = only_forums
         self._backoff = backoff
         self._first_page_urls: dict[ItemRef, str] = {}
         self._last_pages: dict[ItemRef, int] = {}
@@ -70,9 +81,8 @@ class CrawlPlan:
     def rebuild(self) -> Rebuilt:
         """Work out the plan from the store and the link index."""
         self._want(INDEX_PAGE)
-        for ref in self._store.stored_pages():
-            if ref.kind is not Kind.INDEX:
-                self._know(ref.item, ref.page, None)
+        for forum_id in sorted(self._only_forums or ()):  # wanted even if only an unlisted forum links them
+            self._know(ItemRef(Kind.FORUM, forum_id), 1, None)
         indexed = self._links.load()
         to_learn_from = sorted(
             (ref for ref in self._store.stored_pages() if ref.kind is not Kind.THREAD or ref.page == 1),
@@ -86,6 +96,9 @@ class CrawlPlan:
                 missing.append(entry)
             self._learn(entry)
         self._links.record_all(missing)
+        for ref in self._store.stored_pages():  # a stored page past what any link says is known too
+            if ref.kind is not Kind.INDEX and self._in_scope(ref.item, ref):
+                self._know(ref.item, ref.page, None)
         for failures in self._store.failing_pages().values():
             last = failures[-1]
             if last.reason == "redirect" and last.detail:
@@ -118,8 +131,11 @@ class CrawlPlan:
         return PageLinks(ref, title, tuple(grouped.values()))
 
     def note_link(self, url: str) -> int:
+        """A page some page pointed to, such as where it redirected."""
         link = self._on_this_site(url)
-        return 0 if link is None else self._know(link.ref.item, link.ref.page, link.first_page_url)
+        if link is None or not self._in_scope(link.ref.item, link.ref):
+            return 0
+        return self._know(link.ref.item, link.ref.page, link.first_page_url)
 
     def seen_at(self, item: ItemRef, first_page_url: str) -> None:
         """The site just served this item from ``first_page_url``: use that URL from now on."""
@@ -173,7 +189,7 @@ class CrawlPlan:
         if ref.kind is Kind.INDEX:
             return self._start_url
         first = self._first_page_urls.get(ref.item) or bare_first_page_url(
-            self._site_prefix or self._start_url, ref.item
+            self._site_prefix or _with_trailing_slash(self._start_url), ref.item
         )
         return page_url(first, ref.page)
 
@@ -187,10 +203,23 @@ class CrawlPlan:
             self._titles[entry.page.item] = entry.title
         added = 0
         for link in entry.links:
+            if not self._in_scope(link.item, entry.page):
+                continue
             if entry.page.kind is Kind.FORUM and link.item.kind is Kind.THREAD:
                 self._listed_in.setdefault(link.item, entry.page.item)
             added += self._know(link.item, link.last_page, self._origin + link.path)
         return added
+
+    def _in_scope(self, item: ItemRef, seen_on: PageRef) -> bool:
+        """Whether ``item``, linked from ``seen_on``, belongs in the plan: with only_forums, a forum on the
+        list, or a thread one of those forums lists."""
+        if self._only_forums is None:
+            return True
+        if item.kind is Kind.FORUM:
+            return item.item_id in self._only_forums
+        if item in self._last_pages:
+            return True  # already listed by an allowed forum
+        return seen_on.kind is Kind.FORUM and seen_on.item_id in self._only_forums
 
     def _on_this_site(self, url: str) -> PageLink | None:
         link = parse_page_url(url)
@@ -219,6 +248,10 @@ class CrawlPlan:
         self._queued.add(ref)
         self._queued_by_stage[ref.stage] += 1
         return 1
+
+
+def _with_trailing_slash(url: str) -> str:
+    return url if url.endswith("/") else url + "/"
 
 
 def _path(url: str) -> str:

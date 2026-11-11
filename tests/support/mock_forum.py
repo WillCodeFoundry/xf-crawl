@@ -24,8 +24,8 @@ THREADS = {10: 7, 11: 1, 12: 2, 13: 1, 14: 1, 20: 1, 21: 1}
 FORUMS = {2: ("General", "general", [10, 11, 12, 13, 14], [5]), 5: ("Sub", "sub", [20, 21], [])}
 PER_LISTING = 3
 POSTS_PER_PAGE = 20
-_FORUM_PATH = re.compile(r"/forums/([a-z-]+)\.(\d+)/(?:page-(\d+))?")
-_THREAD_PATH = re.compile(r"/threads/([a-z0-9-]+)\.(\d+)/(?:page-(\d+))?")
+_FORUM_PATH = re.compile(r"/forums/(?:([a-z-]+)\.)?(\d+)/(?:page-(\d+))?")
+_THREAD_PATH = re.compile(r"/threads/(?:([a-z0-9-]+)\.)?(\d+)/(?:page-(\d+))?")
 _FORUM_LIST = '<h3 class="node-title"><a href="/forums/general.2/">General</a></h3>'
 
 Reply = tuple[int, str, dict[str, str]]
@@ -93,6 +93,9 @@ class MockForum:
             return 200, _page("forum_list", "Forums", _FORUM_LIST), {}
         forum = _FORUM_PATH.fullmatch(path)
         if forum and int(forum[2]) in FORUMS:
+            slug = FORUMS[int(forum[2])][1]
+            if forum[1] != slug:                     # like XenForo: /forums/5/ redirects to /forums/sub.5/
+                return 301, "", {"Location": f"/forums/{slug}.{forum[2]}/" + (f"page-{forum[3]}" if forum[3] else "")}
             return self._forum(int(forum[2]), int(forum[3] or 1))
         thread = _THREAD_PATH.fullmatch(path)
         if thread and int(thread[2]) in THREADS:

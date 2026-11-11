@@ -24,8 +24,8 @@ def test_the_report_and_the_forums(forum, xf):
     report = xf("status", "--forums").out
     assert "Now on stage 3: every thread's first page." in report
     assert "pages left" in report
-    general = next(line for line in report.splitlines() if line.strip().startswith("General"))
-    assert general.split()[1:3] == ["5", "80%"]          # 5 threads, 4 of them opened
+    general = next(line for line in report.splitlines() if " General " in line)
+    assert general.split()[:4] == ["2", "General", "5", "80%"]   # forum 2: 5 threads, 4 of them opened
 
 
 def test_a_complete_crawl(forum, xf):
