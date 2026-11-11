@@ -33,10 +33,50 @@ jobs:
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
       - run: uvx --from actionlint-py==1.7.12.25 actionlint
 
+  # Python lint (rules in pyproject.toml).
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - run: uv run --locked ruff check .
+
+  # Tests against a fake forum and a fake TunnelBear (no network), including
+  # the checks that a proxied crawl never connects to the forum directly.
+  test:
+    name: test (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python: ["3.10", "3.11", "3.12", "3.13"]
+        include:
+          - os: macos-latest
+            python: "3.13"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          python-version: ${{ matrix.python }}
+      - run: uv run --locked pytest -v
+      - name: Commands start
+        run: |
+          uv run --locked xf-crawl --help > /dev/null
+          uv run --locked xf-mine --help > /dev/null
+          uv run --locked xf-migrate --help > /dev/null
+          uv run --locked tb-proxy --help > /dev/null
+
   # Required by the foundry's rulesets: passes only if every job above did.
   ci-gate:
     if: always()
-    needs: [actionlint]
+    needs: [actionlint, lint, test]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

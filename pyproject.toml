@@ -1,0 +1,37 @@
+[project]
+name = "xfcrawl"
+version = "0.1.0"
+description = "Polite, resumable crawler for XenForo 2.x forums, with optional fail-closed TunnelBear proxying"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.31",
+    "beautifulsoup4>=4.12",
+]
+
+[project.scripts]
+xf-crawl = "xfcrawl.crawl:main"
+xf-mine = "xfcrawl.mine:main"
+xf-migrate = "xfcrawl.migrate:main"
+tb-proxy = "xfcrawl.tb_proxy:cli"
+
+[build-system]
+requires = ["uv_build>=0.11.0,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+    "ruff>=0.17.4",
+    "trustme>=1.2.1",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
