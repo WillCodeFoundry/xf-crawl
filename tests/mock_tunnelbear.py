@@ -4,8 +4,11 @@
   The first /user call hands out a stale token ("tok1") that the proxy
   rejects with 407; later calls hand out "tok2". So every test also
   exercises the token refresh.
-* The server list is ["bad.invalid", "localhost"]: the first one doesn't
-  resolve, so every test also exercises switching servers.
+* The server list is ["127.0.0.1", "localhost"]. Both reach the fake proxy,
+  but its certificate is only valid for "localhost", so the first one always
+  fails certificate checking: every test also exercises switching servers,
+  and the proxy's hostname being verified. (No DNS involved, so it behaves
+  the same on every machine.)
 * Proxy (TLS, certificate from a throwaway CA made with trustme): accepts
   Proxy-Authorization "tok2:tok2", forwards plain-HTTP requests and marks
   them with an X-Test-Proxy: 1 header so the forum can tell proxied
@@ -70,7 +73,7 @@ class MockTunnelBear:
                 if self.path == "/countries":
                     return self.reply([{"iso": "FR", "name": "France"}])
                 if self.path in ("/vpns", "/vpns/countries/FR"):
-                    return self.reply({"vpns": [{"url": "bad.invalid"}, {"url": "localhost"}]})
+                    return self.reply({"vpns": [{"url": "127.0.0.1"}, {"url": "localhost"}]})
                 self.reply({"message": "not found"}, 404)
 
         self.api = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Api)
