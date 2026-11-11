@@ -32,6 +32,18 @@ def test_a_full_crawl(forum, xf):
     assert json.loads((STORE / "config.json").read_text())["start_url"] == forum.url
 
 
+def test_it_crawls_level_by_level(forum, xf):
+    result = xf("crawl", forum.url)
+    fetched = [hit.path for hit in forum.hits if hit.path != "/robots.txt"]
+    kinds = ["index" if p == "/" else "forum" if p.startswith("/forums/") else
+             "first" if not p.split("/")[-1].startswith("page-") else "other" for p in fetched]
+    assert kinds == sorted(kinds, key=["index", "forum", "first", "other"].index)
+    stages = [line.split("Now fetching ")[1].split(":")[0]
+              for line in result.err.splitlines() if "Now fetching" in line]
+    assert stages == ["the forum list", "every forum's thread list", "every thread's first page",
+                      "the threads' other pages"]
+
+
 def test_each_page_is_fetched_once_though_the_sticky_repeats(forum, xf):
     xf("crawl", forum.url)
     assert forum.count("/threads/thread-10.10/") == 1
@@ -110,6 +122,13 @@ def test_a_store_belongs_to_one_forum(forum, xf):
     result = xf("crawl", "http://elsewhere.example/")
     assert result.code == 1
     assert "is a crawl of" in result.err
+
+
+def test_a_url_that_isnt_one_is_refused_at_once(xf):
+    result = xf("crawl", "Traceback (most recent call last):")
+    assert result.code == 1
+    assert "is not a forum address" in result.err
+    assert not Path(".crawl-store/config.json").exists()
 
 
 def test_crawl_without_a_url_and_no_store_explains(xf):

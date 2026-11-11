@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 
@@ -94,6 +95,8 @@ def settle_config(layout: StoreLayout, url: str | None, change: ProxyChange | No
     existing = config.load(layout)
     if existing is None and url is None:
         raise XfError(f"no crawl in {layout.root} yet; give the forum's URL")
+    if url is not None:
+        check_forum_url(url)
     if existing is not None and url is not None and url != existing.start_url:
         raise XfError(f"{layout.root} is a crawl of {existing.start_url}; crawl another forum from another directory")
     settled = existing or CrawlConfig.new(str(url))
@@ -105,6 +108,12 @@ def settle_config(layout: StoreLayout, url: str | None, change: ProxyChange | No
     if settled.proxy is not None:
         _LOGGER.info("Route: %s; --direct to stop", config.describe(settled.proxy))
     return settled
+
+
+def check_forum_url(url: str) -> None:
+    site = urlparse(url)
+    if site.scheme not in ("http", "https") or not site.netloc:
+        raise XfError(f"{url!r} is not a forum address; give one like https://forum.example/")
 
 
 def connect_to_site(

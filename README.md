@@ -23,6 +23,7 @@ uv run xf pending                           # what is still to fetch (no network
 uv run xf mine                              # statistics (--json for JSON)
 ```
 
+- **Level by level:** first the forum list, then every forum's thread list, then every thread's first page, then the threads' other pages. Stop it at any stage and you have everything above it: all forums, then all thread titles, then every thread's opening.
 - **Resumable:** stop it at any time, or let it crash. The next run fetches only what isn't stored yet.
 - **Polite:** about 1 to 1.5 seconds between requests (`--delay`, `--jitter`), robots.txt obeyed (`--ignore-robots` not to), and waits and retries when the site is busy.
 - **Failures:** a page that can't be fetched is never stored. Its failures are recorded beside it and retried on later runs, waiting longer after each one: 1h, 2h, 4h… for temporary errors, 1d, 2d… for pages that look gone. `--retry-failed` tries them now.

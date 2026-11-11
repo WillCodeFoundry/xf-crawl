@@ -50,6 +50,13 @@ def test_slug_of(url, slug):
     assert slug_of(url) == slug
 
 
+def test_every_threads_first_page_comes_before_any_later_page():
+    refs = [PageRef(Kind.THREAD, 1, 2), PageRef(Kind.THREAD, 99, 1), PageRef(Kind.THREAD, 1, 1),
+            PageRef(Kind.FORUM, 5, 3)]
+    assert sorted(refs, key=PageRef.crawl_order) == [
+        PageRef(Kind.FORUM, 5, 3), PageRef(Kind.THREAD, 1, 1), PageRef(Kind.THREAD, 99, 1), PageRef(Kind.THREAD, 1, 2)]
+
+
 def test_crawl_order_is_index_then_forums_then_threads():
     refs = [PageRef(Kind.THREAD, 1, 2), PageRef(Kind.FORUM, 9, 1), INDEX_PAGE, PageRef(Kind.THREAD, 1, 1)]
     assert sorted(refs, key=PageRef.crawl_order) == [
