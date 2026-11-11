@@ -1,0 +1,43 @@
+# Checks on every pull request and on main. ci-gate is the one check the
+# foundry's rulesets require, so jobs can be added here without touching
+# them: list each new job in ci-gate's needs. The on: block and ci-gate must
+# match the foundry's config/repo-policy/ci-gate.yml.
+#
+# Actions are pinned to commit SHAs and kept current by Dependabot
+# (.github/dependabot.yml).
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Cancel a pull request's superseded runs, but let every commit on main finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Mistakes in these workflows, before they reach main.
+  actionlint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - run: uvx --from actionlint-py==1.7.12.25 actionlint
+
+  # Required by the foundry's rulesets: passes only if every job above did.
+  ci-gate:
+    if: always()
+    needs: [actionlint]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: '[[ "${{ !contains(needs.*.result, ''failure'') && !contains(needs.*.result, ''cancelled'') }}" == true ]]'

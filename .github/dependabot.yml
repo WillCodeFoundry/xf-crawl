@@ -1,0 +1,9 @@
+# Weekly pull requests for newer GitHub Actions (the SHAs pinned in
+# workflows). Each goes through ci-gate and needs a review like any other
+# change to main.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
