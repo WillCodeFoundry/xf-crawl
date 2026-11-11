@@ -1,22 +1,22 @@
-from datetime import timedelta
-
 import pytest
 
-from xfcrawl.common import backoff, classify, normalize, page_url, slug_of
-from xfcrawl.mine import parse_count
+from xfcrawl.urls import INDEX_PAGE, ItemRef, Kind, PageRef, normalize, page_url, parse_page_url, slug_of
 
 
-@pytest.mark.parametrize("url, expected", [
-    ("http://x/threads/hello.12/", ("thread", 12, 1, "http://x/threads/hello.12/")),
-    ("http://x/threads/hello.12/page-7", ("thread", 12, 7, "http://x/threads/hello.12/")),
-    ("http://x/forums/general.2/page-3", ("forum", 2, 3, "http://x/forums/general.2/")),
-    ("http://x/threads/12/", ("thread", 12, 1, "http://x/threads/12/")),
-    ("http://x/forum/index.php?threads/hello.12/page-2", ("thread", 12, 2, "http://x/forum/index.php?threads/hello.12/")),
-    ("http://x/forums/general.2/?prefix_id=1", ("forum", 2, 1, "http://x/forums/general.2/")),
-    ("http://x/threads/hello.12/#post-5", ("thread", 12, 1, "http://x/threads/hello.12/")),
+@pytest.mark.parametrize(("url", "ref", "first_page_url"), [
+    ("http://x/threads/hello.12/", PageRef(Kind.THREAD, 12, 1), "http://x/threads/hello.12/"),
+    ("http://x/threads/hello.12/page-7", PageRef(Kind.THREAD, 12, 7), "http://x/threads/hello.12/"),
+    ("http://x/forums/general.2/page-3", PageRef(Kind.FORUM, 2, 3), "http://x/forums/general.2/"),
+    ("http://x/threads/12/", PageRef(Kind.THREAD, 12, 1), "http://x/threads/12/"),
+    ("http://x/forum/index.php?threads/hello.12/page-2", PageRef(Kind.THREAD, 12, 2),
+     "http://x/forum/index.php?threads/hello.12/"),
+    ("http://x/forums/general.2/?prefix_id=1", PageRef(Kind.FORUM, 2, 1), "http://x/forums/general.2/"),
+    ("http://x/threads/hello.12/#post-5", PageRef(Kind.THREAD, 12, 1), "http://x/threads/hello.12/"),
 ])
-def test_classify_pages(url, expected):
-    assert classify(url) == expected
+def test_page_urls_are_recognised(url, ref, first_page_url):
+    link = parse_page_url(url)
+    assert link is not None
+    assert (link.ref, link.first_page_url) == (ref, first_page_url)
 
 
 @pytest.mark.parametrize("url", [
@@ -26,11 +26,11 @@ def test_classify_pages(url, expected):
     "http://x/members/bob.3/",
     "http://x/",
 ])
-def test_classify_rejects_non_pages(url):
-    assert classify(url) is None
+def test_other_urls_are_not_pages(url):
+    assert parse_page_url(url) is None
 
 
-def test_normalize_keeps_route_in_query_only():
+def test_normalize_keeps_only_a_route_from_the_query():
     assert normalize("http://x/index.php?threads/a.1/&foo=1#x") == "http://x/index.php?threads/a.1/"
     assert normalize("http://x/forums/a.1/?order=title") == "http://x/forums/a.1/"
 
@@ -40,31 +40,21 @@ def test_page_url():
     assert page_url("http://x/threads/a.1/", 4) == "http://x/threads/a.1/page-4"
 
 
-@pytest.mark.parametrize("url, slug", [
+@pytest.mark.parametrize(("url", "slug"), [
     ("http://x/forums/french-english.46/", "french-english"),
     ("http://x/threads/parler-le-fran%C3%A7ais.1234567/", "parler-le-français"),
     ("http://x/threads/12/", None),
     ("http://x/threads/we-ird%2Fslug.5/", "we-ird-slug"),
-    (None, None),
 ])
 def test_slug_of(url, slug):
     assert slug_of(url) == slug
 
 
-def test_backoff_doubles_and_caps():
-    assert backoff(1, "http-503") == timedelta(hours=1)
-    assert backoff(3, "http-503") == timedelta(hours=4)
-    assert backoff(1, "http-404") == timedelta(days=1)
-    assert backoff(2, "redirect") == timedelta(days=2)
-    assert backoff(50, "http-503") == timedelta(days=30)
+def test_crawl_order_is_index_then_forums_then_threads():
+    refs = [PageRef(Kind.THREAD, 1, 2), PageRef(Kind.FORUM, 9, 1), INDEX_PAGE, PageRef(Kind.THREAD, 1, 1)]
+    assert sorted(refs, key=PageRef.crawl_order) == [
+        INDEX_PAGE, PageRef(Kind.FORUM, 9, 1), PageRef(Kind.THREAD, 1, 1), PageRef(Kind.THREAD, 1, 2)]
 
 
-@pytest.mark.parametrize("text, expected", [
-    ("1,234", (1234, False)),
-    ("1.2K", (1200, True)),
-    ("3M", (3_000_000, True)),
-    ("1 045", (1045, False)),
-    ("n/a", (None, False)),
-])
-def test_parse_count(text, expected):
-    assert parse_count(text) == expected
+def test_page_keys():
+    assert ItemRef(Kind.THREAD, 12).page(3).key == "thread:12:3"
