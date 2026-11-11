@@ -10,10 +10,7 @@ dependencies = [
 ]
 
 [project.scripts]
-xf-crawl = "xfcrawl.crawl:main"
-xf-mine = "xfcrawl.mine:main"
-xf-migrate = "xfcrawl.migrate:main"
-tb-proxy = "xfcrawl.tb_proxy:cli"
+xf = "xfcrawl.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.11.0,<0.12.0"]
@@ -21,17 +18,88 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "mypy>=2.4.1",
     "pytest>=9.2.0",
+    "pytest-cov>=7.1.0",
     "ruff>=0.17.4",
     "trustme>=1.2.1",
+    "types-requests>=2.33.0.20261030",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+xfail_strict = true
+filterwarnings = ["error"]
+
+# CI runs the tests with --cov. Code no test reaches is code no test holds, so CI fails when coverage
+# drops below fail_under. Raise it as coverage rises; lower it only with a reason.
+[tool.coverage.run]
+source = ["src"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 92
+show_missing = true
+skip_covered = true
 
 [tool.ruff]
 line-length = 120
 target-version = "py310"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "B", "UP"]
+select = [
+    "E", "F", "W", "I", "UP", "B", "RUF", "PLW", "N", "A",
+    # Smells a tool can see.
+    "ARG",                                    # parameters nobody reads
+    "BLE", "S110", "S112",                    # blanket except, and except that passes or continues (DR6)
+    "TRY002", "TRY201", "TRY203", "TRY300", "TRY301", "TRY400",  # raising, re-raising and logging exceptions
+    "S101",                                   # assert in production code, which -O removes
+    "C90", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR0917",  # functions that every change grows
+    "FBT",                                    # boolean flags that pick a behaviour
+    "SLF",                                    # reaching into another object's private members
+    "T20",                                    # print outside the entry points (DR6)
+    "ERA",                                    # commented-out code
+    "PGH",                                    # blanket type: ignore and noqa
+    "ASYNC",                                  # blocking calls in async code
+    "S113", "S301", "S307", "S324", "S501",   # unsafe calls: no timeout, pickle, eval, weak hashes, no TLS check
+    "PT011", "PT012", "PT015", "PT017", "PT027",  # pytest.raises too broad or too wide, asserts that can't fail
+    "SIM", "RET", "PIE", "C4",                # simpler forms of the same code
+    "TID251", "TID252",                       # banned APIs, below; relative imports
+]
+ignore = [
+    "N818",    # an exception is named for what happened, such as ProxyDown, not always an error
+    "ARG005",  # a lambda passed as a callback takes the arguments its caller passes
+]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
+[tool.ruff.lint.per-file-ignores]
+# Test functions take fixtures for their effect, and fakes take the arguments of what they stand in for.
+"tests/**" = ["ARG", "FBT", "S101", "PLR0913", "PLR0917", "SLF"]
+# The entry points: the only modules that print, or write to sys.stdout or sys.stderr (DR6).
+"src/xfcrawl/cli.py" = ["T20", "TID251"]
+"src/xfcrawl/commands/*" = ["T20", "TID251"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"unittest.mock".msg = "Tests never patch: fake the outside system instead, as DR3 in ARCHITECTURE.md says."
+"sys.stdout".msg = "Only entry points write here: log progress to the module's logger, as DR6 says."
+"sys.stderr".msg = "Only entry points write here: log progress to the module's logger, as DR6 says."
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.mypy]
+strict = true
+files = ["src", "tests"]
+warn_unreachable = true
+enable_error_code = [
+    "ignore-without-code", "redundant-expr", "truthy-bool", "truthy-iterable", "possibly-undefined",
+    "unused-awaitable", "redundant-self", "mutable-override",
+]
+
+[[tool.mypy.overrides]]
+# Test functions take fixtures as parameters; their bodies are still checked.
+module = ["tests.*"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
+check_untyped_defs = true
