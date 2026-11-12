@@ -22,8 +22,11 @@ class PageStore:
     def __init__(self, layout: StoreLayout) -> None:
         """An empty store; use ``open`` for one that reads what is on disk."""
         self._layout = layout
-        self._item_dirs: dict[ItemRef, Path] = {}
-        self._stored: set[PageRef] = set()
+        self._dir_names: dict[ItemRef, str] = {}  # a name, not a Path: one per thread, so size counts
+        # Which pages are stored, as one number per forum or thread: bit n set means page n is. A set of
+        # pages would cost an object per page; this costs about one per thread.
+        self._stored: dict[ItemRef, int] = {}
+        self._stored_count = 0
         self._failures: dict[PageRef, list[Failure]] = {}
 
     @classmethod
@@ -36,13 +39,18 @@ class PageStore:
 
     # -- what is stored ------------------------------------------------------------------------------
     def is_stored(self, ref: PageRef) -> bool:
-        return ref in self._stored
+        return bool(self._stored.get(ref.item, 0) >> ref.page & 1)
 
     def stored_pages(self) -> Iterator[PageRef]:
-        return iter(self._stored)
+        for item, pages in list(self._stored.items()):
+            remaining = pages
+            while remaining:
+                lowest = remaining & -remaining
+                yield item.page(lowest.bit_length() - 1)
+                remaining ^= lowest
 
     def stored_count(self) -> int:
-        return len(self._stored)
+        return self._stored_count
 
     def failures(self, ref: PageRef) -> list[Failure]:
         """The page's failed fetches, oldest first; empty if it never failed or was fetched since."""
@@ -55,7 +63,8 @@ class PageStore:
         return gzip.decompress(self._page_path(ref).read_bytes()).decode("utf-8", errors="replace")
 
     def item_dir(self, item: ItemRef) -> Path | None:
-        return self._item_dirs.get(item)
+        name = self._dir_names.get(item)
+        return None if name is None else self._layout.item_parent(item) / name
 
     # -- changing it ---------------------------------------------------------------------------------
     def save(self, ref: PageRef, html: str, current_slug: str | None) -> None:
@@ -64,7 +73,7 @@ class PageStore:
         if ref.kind is not Kind.INDEX:
             self._name_folder(ref.item, current_slug, rename_named=True)
         atomic_write(self._page_path(ref), gzip.compress(html.encode("utf-8"), compresslevel=6, mtime=0))
-        self._stored.add(ref)
+        self._mark_stored(ref)
         if self._failures.pop(ref, None) is not None:
             self._failure_path(ref).unlink(missing_ok=True)
 
@@ -84,9 +93,9 @@ class PageStore:
 
     # -- internals -----------------------------------------------------------------------------------
     def _name_folder(self, item: ItemRef, slug: str | None, *, rename_named: bool) -> None:
-        current = self._item_dirs.get(item)
+        current = self.item_dir(item)
         if current is None:
-            self._item_dirs[item] = self._layout.item_dir(item, slug)
+            self._dir_names[item] = str(ItemDirName(item.item_id, slug))
             return
         name = ItemDirName.parse(current.name)
         has_words = name is not None and name.slug is not None
@@ -98,10 +107,11 @@ class PageStore:
                 merge_dirs(current, wanted)
             else:
                 current.rename(wanted)
-        self._item_dirs[item] = wanted
+        self._dir_names[item] = wanted.name
 
     def _dir(self, ref: PageRef) -> Path:
-        return self._item_dirs.setdefault(ref.item, self._layout.item_dir(ref.item, None))
+        name = self._dir_names.setdefault(ref.item, str(ItemDirName(ref.item_id, None)))
+        return self._layout.item_parent(ref.item) / name
 
     def _page_path(self, ref: PageRef) -> Path:
         if ref == INDEX_PAGE:
@@ -116,9 +126,9 @@ class PageStore:
     def _scan(self) -> None:
         self._find_item_dirs()
         self._read_dir(INDEX_PAGE.item, self._layout.pages_dir)
-        for item, path in list(self._item_dirs.items()):
-            self._read_dir(item, path)
-        for ref in [ref for ref in self._failures if ref in self._stored]:
+        for item, name in list(self._dir_names.items()):
+            self._read_dir(item, self._layout.item_parent(item) / name)
+        for ref in [ref for ref in self._failures if self.is_stored(ref)]:
             self._failures.pop(ref)
             self._failure_path(ref).unlink()
 
@@ -127,14 +137,14 @@ class PageStore:
         for group in _subdirs_named_by_number(self._layout.threads_dir):
             found += _subdirs(group, Kind.THREAD)
         for item, path in found:
-            previous = self._item_dirs.get(item)
+            previous = self.item_dir(item)
             if previous is None:
-                self._item_dirs[item] = path
+                self._dir_names[item] = path.name
                 continue
             # two folders for one item: an interrupted rename. Keep the one with words.
             keep, drop = (path, previous) if _has_words(path) else (previous, path)
             merge_dirs(drop, keep)
-            self._item_dirs[item] = keep
+            self._dir_names[item] = keep.name
 
     def _read_dir(self, item: ItemRef, path: Path) -> None:
         if not path.is_dir():
@@ -152,7 +162,12 @@ class PageStore:
             if name.is_failure:
                 self._failures[ref] = parse_failures(Path(entry.path).read_text(encoding="utf-8"))
             else:
-                self._stored.add(ref)
+                self._mark_stored(ref)
+
+    def _mark_stored(self, ref: PageRef) -> None:
+        if not self.is_stored(ref):
+            self._stored[ref.item] = self._stored.get(ref.item, 0) | 1 << ref.page
+            self._stored_count += 1
 
 
 def _subdirs(parent: Path, kind: Kind) -> list[tuple[ItemRef, Path]]:

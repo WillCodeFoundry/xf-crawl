@@ -25,6 +25,11 @@ class Stage(int, Enum):
     THREAD_FIRST_PAGES = 2
     THREAD_OTHER_PAGES = 3
 
+    @property
+    def kind(self) -> "Kind":
+        """The kind of page the stage fetches."""
+        return {Stage.FORUM_LIST: Kind.INDEX, Stage.THREAD_LISTS: Kind.FORUM}.get(self, Kind.THREAD)
+
     def describe(self) -> str:
         return {
             Stage.FORUM_LIST: "the forum list",
@@ -40,7 +45,7 @@ _SLUG = re.compile(r"(?:threads|forums)/(?:([^/?#&]*)\.)?\d+/$")
 _SLUG_MAX_LENGTH = 120
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ItemRef:
     """A forum or thread, by its number."""
 
@@ -51,7 +56,7 @@ class ItemRef:
         return PageRef(self.kind, self.item_id, page)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PageRef:
     kind: Kind
     item_id: int

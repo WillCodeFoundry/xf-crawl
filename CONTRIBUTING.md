@@ -21,6 +21,7 @@ $ uv run mypy
 | `mypy` | strict typing, plus unreachable code, redundant expressions and always-true conditions |
 | `pytest --cov` | branches no test runs: CI fails when coverage of `src/` drops below `fail_under` in `pyproject.toml` |
 | `tests/test_rules.py` | `requests` or BeautifulSoup imported outside their doors (DR3), and tests using `monkeypatch` |
+| `tests/test_memory.py` | planning that costs more memory per thread than a forum with millions of threads can afford (DR8) |
 
 `pyproject.toml` says why each ruff rule is on. Silence a finding on one line with `# noqa: <code>` and the reason.
 

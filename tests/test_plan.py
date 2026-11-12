@@ -59,7 +59,7 @@ def test_a_failed_page_waits_out_its_back_off():
     store.save(INDEX_PAGE, page("/threads/t.10/"), None)
     store.record_failure(THREAD.page(1), Failure(NOW, "http-503"), None)
     waiting = plan_for(store, NOW + timedelta(minutes=30))
-    assert waiting.to_fetch() == []
+    assert list(waiting.to_fetch()) == []
     assert waiting.waiting() == {THREAD.page(1): NOW + timedelta(hours=1)}
     assert [ref.key for ref in plan_for(store, NOW + timedelta(hours=1, seconds=1)).to_fetch()] == ["thread:10:1"]
     assert [ref.key for ref in plan_for(store, NOW, ignore_backoff=True).to_fetch()] == ["thread:10:1"]
@@ -89,7 +89,7 @@ def test_put_back_returns_a_page_to_the_front():
     ref = plan.next_page()
     assert ref == INDEX_PAGE
     plan.put_back(ref)
-    assert plan.to_fetch() == [INDEX_PAGE]
+    assert list(plan.to_fetch()) == [INDEX_PAGE]
 
 
 def test_a_rebuild_reads_the_index_not_the_pages():
@@ -104,7 +104,7 @@ def test_a_rebuild_reads_the_index_not_the_pages():
     for path in Path(".crawl-store/pages").rglob("*.html.gz"):       # the pages can't be read any more...
         path.write_bytes(b"not gzip")
     again = plan_for(store)                                           # ...and aren't needed
-    assert again.to_fetch() == first.to_fetch()
+    assert list(again.to_fetch()) == list(first.to_fetch())
     assert again.listed_in(THREAD) == ItemRef(Kind.FORUM, 2)
     assert again.title(ItemRef(Kind.FORUM, 2)) == "General"
 
