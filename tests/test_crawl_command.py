@@ -146,6 +146,22 @@ def test_robots_txt_is_obeyed(forum, xf):
     assert "blocked by robots.txt" in result.err
 
 
+def test_robots_rules_for_xf_crawl_apply_though_it_passes_for_a_browser(forum, xf):
+    forum.robots = "User-agent: xf-crawl\nDisallow: /threads/\n\nUser-agent: *\nDisallow:\n"
+    xf("crawl", forum.url)
+    assert not [hit for hit in forum.hits if hit.path.startswith("/threads/")]
+
+
+def test_it_passes_for_one_browser_for_the_whole_run(forum, xf):
+    result = xf("crawl", forum.url)
+    agents = {hit.headers["User-Agent"] for hit in forum.hits}
+    assert len(agents) == 1
+    agent = agents.pop()
+    assert agent.startswith("Mozilla/5.0 (") and "xf-crawl" not in agent
+    assert all(hit.headers["Accept"].startswith("text/html") for hit in forum.hits)
+    assert "Passing for " in result.err
+
+
 def test_a_second_run_plans_from_the_link_index(forum, xf):
     xf("crawl", forum.url)
     assert "links of 11 from the link index, 0 read from the pages" in xf("crawl").err

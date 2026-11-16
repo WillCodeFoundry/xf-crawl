@@ -3,11 +3,12 @@
 import argparse
 import logging
 import os
+import random
 import sys
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from functools import partial
 from pathlib import Path
 from urllib.parse import urlparse
@@ -15,12 +16,13 @@ from urllib.parse import urlparse
 import requests
 
 from xfcrawl import config, migration
+from xfcrawl.browser import Browser
 from xfcrawl.commands.tunnelbear import ask_for_credentials, open_account
 from xfcrawl.config import CrawlConfig, ProxySetting, TunnelBearProxy, UrlProxy
 from xfcrawl.crawler import Connection, Crawl, CrawlSummary, connect
 from xfcrawl.errors import XfError
 from xfcrawl.failures import Backoff, RetryPolicy
-from xfcrawl.fetching import DEFAULT_DELAY, DEFAULT_JITTER, USER_AGENT, Pacing, PoliteFetcher
+from xfcrawl.fetching import DEFAULT_DELAY, DEFAULT_JITTER, Pacing, PoliteFetcher
 from xfcrawl.layout import StoreLayout
 from xfcrawl.link_index import LinkIndex
 from xfcrawl.plan import CrawlPlan
@@ -165,7 +167,9 @@ def connect_to_site(
     """The fetcher for this crawl, through its proxy if it has one, and the site's robots.txt."""
     route = proxy_route(crawl_config.proxy, layout, environment, credentials)
     session = requests.Session() if route is None else proxied_session(environment.get("REQUESTS_CA_BUNDLE"))
-    session.headers["User-Agent"] = USER_AGENT
+    browser = Browser.pick(random.Random(), date.today())
+    session.headers.update(browser.headers)
+    _LOGGER.info("Passing for %s", browser.describe())
     if args.cookie:
         session.headers["Cookie"] = args.cookie
     if route is not None:

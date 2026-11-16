@@ -4,14 +4,17 @@ import argparse
 import asyncio
 import getpass
 import os
+import random
 import ssl
 import sys
 from collections.abc import Callable, Mapping
+from datetime import date
 from pathlib import Path
 from typing import Any, BinaryIO
 
 import requests
 
+from xfcrawl.browser import Browser
 from xfcrawl.errors import XfError
 from xfcrawl.layout import StoreLayout
 from xfcrawl.proxy import proxied_session
@@ -67,7 +70,9 @@ def countries_main(_args: argparse.Namespace) -> int:
 
 def fetch_main(args: argparse.Namespace) -> int:
     rotation = ServerRotation(logged_in_account(StoreLayout.in_directory(Path.cwd()), os.environ), args.country)
-    response = fetch_through(rotation, proxied_session(os.environ.get("REQUESTS_CA_BUNDLE")), args.url)
+    session = proxied_session(os.environ.get("REQUESTS_CA_BUNDLE"))
+    session.headers.update(Browser.pick(random.Random(), date.today()).headers)
+    response = fetch_through(rotation, session, args.url)
     print(f"HTTP {response.status_code}, {len(response.content)} bytes", file=sys.stderr)
     write_body(response.content, args.output, sys.stdout.buffer)
     return 0
