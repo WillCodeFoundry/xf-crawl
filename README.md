@@ -27,8 +27,14 @@ uv run xf mine                              # statistics (--json for JSON)
 - **Level by level:** first the forum list, then every forum's thread list, then every thread's first page, then the threads' other pages. Stop it at any stage and you have everything above it: all forums, then all thread titles, then every thread's opening.
 - **Resumable:** stop it at any time, or let it crash. The next run fetches only what isn't stored yet.
 - **Polite:** about 1 to 1.5 seconds between requests (`--delay`, `--jitter`), robots.txt obeyed (`--ignore-robots` not to), and waits and retries when the site is busy.
-- **Looks like a browser:** each run picks a common desktop browser at random (Chrome, Edge, Firefox or Safari, on Windows, macOS or Linux, a version or two from the latest) and sends its user agent and headers for every request of that run. The first lines of a run say which, e.g. `Passing for Firefox 158 on Linux`. robots.txt rules are still matched as `xf-crawl`, falling back to the rules for every robot.
+- **Looks like a person browsing:**
+  - **One browser:** the first run picks a common desktop browser at random (Chrome, Edge, Firefox or Safari, on Windows, macOS or Linux, a version or two from the latest) and sends its user agent and headers. Later runs keep it, updating its version as browsers update themselves. The first lines of a run say which, e.g. `Passing for Firefox 158 on Linux, back with 1 cookies`.
+  - **Cookies:** the site's cookies are kept, within a run and from run to run, in `.crawl-store/visitor.json` (readable only by you). `--new-browser` starts afresh with a new browser and no cookies. `--cookie` replaces the kept cookies for that run.
+  - **Followed links:** each page is asked for as if from a link on the page a person would come from: the page before it, the forum listing a thread, or the forum index.
+  - **Breaks:** about one gap in a hundred is a break of 5 to 20 times `--delay`. That adds about a tenth to a crawl's time.
+  - **robots.txt** rules are still matched as `xf-crawl`, falling back to the rules for every robot.
 - **Failures:** a page that can't be fetched is never stored. Its failures are recorded beside it and retried on later runs, waiting longer after each one: 1h, 2h, 4h… for temporary errors, 1d, 2d… for pages that look gone. `--retry-failed` tries them now.
+- **Gives up when nothing comes through:** if no page has been stored for a minute (`--give-up-after SECONDS`), the run stops with an error and exit code 1: the site is down, the route has stopped working, or the crawler is being turned away. A deleted thread or a redirect counts as the site answering normally. A run stopped because the proxy failed also exits with 1.
 
 ### Only some forums
 
@@ -85,6 +91,7 @@ URL-encode special characters in the username and password (`@` -> `%40`, `:` ->
   config.json                                                   start URL and proxy setting
   links.jsonl                                                   what each page links to, so restarts are quick
   tunnelbear.json                                               TunnelBear login tokens (if used)
+  visitor.json                                                  the browser the crawl passes for, and the site's cookies
   pages/index.html.gz
   pages/forums/french-english.46/page-0001.html.gz
   pages/threads/1234/parler-le-francais.1234567/page-0001.html.gz

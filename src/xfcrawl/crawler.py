@@ -19,7 +19,11 @@ from xfcrawl.store import PageStore
 from xfcrawl.urls import Kind, PageRef, parse_page_url, slug_of
 
 _LOGGER = logging.getLogger(__name__)
-_FAILURES_IN_A_ROW_TO_STOP = 5
+DEFAULT_GIVE_UP_AFTER = 60.0
+"""Seconds without a page coming through after which a run stops: the site or the route has stopped working,
+or the crawler is being turned away."""
+_NORMAL_ANSWERS = frozenset({"redirect", "http-404", "http-410"})
+"""Failures that still show the site answering normally: a page past a thread's end, or a deleted thread."""
 _REPORT_EVERY_SECONDS = 30.0
 
 
@@ -62,6 +66,8 @@ class CrawlSummary:
     errors: int = 0
     stopped: str | None = None
     """Why the run stopped early, if it did."""
+    failed: bool = False
+    """Whether it stopped because something went wrong, rather than as asked."""
     waiting: dict[PageRef, datetime] = field(default_factory=dict)
     to_fetch: int = 0
 
@@ -93,6 +99,7 @@ class Crawl:
     connect: Callable[[], Connection]
     now: Callable[[], datetime]
     clock: Callable[[], float]
+    give_up_after: float = DEFAULT_GIVE_UP_AFTER
 
     def run(self, *, max_fetches: int | None) -> CrawlSummary:
         summary = CrawlSummary(to_fetch=self.plan.to_fetch_count(), waiting=self.plan.waiting())
@@ -101,7 +108,7 @@ class Crawl:
         try:
             connection = self.connect()
         except ProxyDown as error:
-            summary.stopped = f"proxy not working: {error}"
+            summary.stopped, summary.failed = f"proxy not working: {error}", True
             return summary
         self._loop(connection, summary, max_fetches)
         summary.waiting = self.plan.waiting()
@@ -109,8 +116,8 @@ class Crawl:
         return summary
 
     def _loop(self, connection: Connection, summary: CrawlSummary, max_fetches: int | None) -> None:
-        fetches = in_a_row = 0
-        last_report = self.clock()
+        fetches = 0
+        last_report = last_success = self.clock()
         stage = None
         while (ref := self.plan.next_page()) is not None:
             if max_fetches is not None and fetches >= max_fetches:
@@ -126,33 +133,46 @@ class Crawl:
                 continue
             _LOGGER.info("GET %-20s %s", ref.key, url)
             try:
-                response = connection.fetcher.get(url)
+                outcome = self._fetch(connection.fetcher, ref, url)
             except ProxyDown as error:
                 self.plan.put_back(ref)
                 summary.stopped = f"proxy not working (nothing recorded against {ref.key}): {error}"
+                summary.failed = True
                 break
-            except FetchFailed as error:
-                fetches += 1
+            fetches += 1
+            if isinstance(outcome, Reject):
                 summary.errors += 1
-                in_a_row += 1
-                self._fail(ref, url, Reject(error.reason, error.detail, f"{error} (after retries)"))
-                if in_a_row >= _FAILURES_IN_A_ROW_TO_STOP:
-                    summary.stopped = f"{in_a_row} failures in a row; is the site down?"
+                self._fail(ref, url, outcome)
+                if outcome.reason in _NORMAL_ANSWERS:
+                    last_success = self.clock()
+                elif self._give_up(summary, outcome, self.clock() - last_success):
                     break
                 continue
-            fetches += 1
-            verdict = judge(ref, response)
-            if isinstance(verdict, Reject):
-                summary.errors += 1
-                self._fail(ref, url, verdict)
-                continue
-            in_a_row = 0
-            self._save(ref, url, response, verdict)
+            last_success = self.clock()
+            self._save(ref, url, *outcome)
             summary.saved += 1
             if self.clock() - last_report > _REPORT_EVERY_SECONDS:
                 _LOGGER.info("    %s: %d left in this stage, %d known to fetch in all", ref.stage.describe(),
                              self.plan.to_fetch_in(ref.stage), self.plan.to_fetch_count())
                 last_report = self.clock()
+
+    def _fetch(self, fetcher: Fetcher, ref: PageRef, url: str) -> tuple[Response, Store] | Reject:
+        """The page and what to do with it, or why it can't be stored; raises ProxyDown."""
+        try:
+            response = fetcher.get(url, self.plan.referer_of(ref))
+        except FetchFailed as error:
+            return Reject(error.reason, error.detail, f"{error} (after retries)")
+        verdict = judge(ref, response)
+        return verdict if isinstance(verdict, Reject) else (response, verdict)
+
+    def _give_up(self, summary: CrawlSummary, last: Reject, silent: float) -> bool:
+        """Whether to stop, after ``silent`` seconds without a page coming through."""
+        if silent < self.give_up_after:
+            return False
+        summary.stopped = (f"no page has come through for {silent:.0f}s, the last answer being {last.reason}; "
+                           "is the site down, or turning the crawler away?")
+        summary.failed = True
+        return True
 
     def _save(self, ref: PageRef, url: str, response: Response, verdict: Store) -> None:
         if verdict.first_page_url is not None:

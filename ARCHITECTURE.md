@@ -30,7 +30,8 @@ How xf-crawl is put together, and the rules its code follows.
 | `progress.py` | How far a crawl has got, by stage and by forum, and an estimate of the time left; `xf status` shows it. |
 | `xenforo.py` | What the crawler reads from a page's HTML: links, the title, the template name, whether it arrived whole. |
 | `fetching.py` | `PoliteFetcher`: the only module that sends the crawler's requests. Pacing, retries, and failing closed with a proxy. |
-| `browser.py` | `Browser`: the browser a run passes for, picked at random, with a version worked out from the date. |
+| `browser.py` | `Browser`: the browser a crawl passes for, picked at random, with a version worked out from the date, and the headers it sends. |
+| `visitor.py` | `VisitorFile`: the browser and the site's cookies, kept from run to run in `visitor.json`. |
 | `proxy.py` | The `ProxyRoute` protocol, `FixedProxy`, `ProxyDown`, and `proxied_session`, which makes the proxy the only way out. |
 | `robots.py` | `RobotsRules`: the site's robots.txt, fetched through the fetcher, matched as `xf-crawl`. |
 | `crawler.py` | The crawl loop: `judge`, `connect`, `Crawl`. |

@@ -1,8 +1,10 @@
+import random
+
 import pytest
 import requests
 
 from tests.support.mock_forum import MockForum
-from xfcrawl.fetching import FetchFailed, Pacing, PoliteFetcher
+from xfcrawl.fetching import FetchFailed, Pacing, PoliteFetcher, average_gap
 from xfcrawl.proxy import FixedProxy, Proxies, ProxyDown, refused_credentials
 
 
@@ -41,8 +43,18 @@ class BrokenRoute:
         return "a broken route"
 
 
+class NoBreaks(random.Random):
+    def random(self) -> float:
+        return 0.5
+
+
+class AlwaysBreaks(random.Random):
+    def random(self) -> float:
+        return 0.0
+
+
 def fetcher(waits: Waits, route=None, delay: float = 0.0) -> PoliteFetcher:
-    return PoliteFetcher(requests.Session(), Pacing(delay, 0.0, waits.pause, waits.clock), route)
+    return PoliteFetcher(requests.Session(), Pacing(delay, 0.0, waits.pause, waits.clock, NoBreaks()), route)
 
 
 def test_requests_are_spaced_out(forum: MockForum):
@@ -51,6 +63,36 @@ def test_requests_are_spaced_out(forum: MockForum):
     polite.get(forum.url)
     polite.get(forum.url)
     assert waits.paused == [1.5]
+
+
+def test_now_and_then_a_gap_is_a_break_of_several_delays(forum: MockForum):
+    waits = Waits()
+    polite = PoliteFetcher(requests.Session(), Pacing(2.0, 0.0, waits.pause, waits.clock, AlwaysBreaks()), None)
+    polite.get(forum.url)
+    polite.get(forum.url)
+    assert 2.0 + 5 * 2.0 <= waits.paused[-1] <= 2.0 + 20 * 2.0
+
+
+def test_breaks_are_rare_and_add_little_on_average():
+    pacing = Pacing(1.0, 0.0, rng=random.Random(3))
+    gaps: list[float] = []
+    for _ in range(5000):
+        pacing.pause = gaps.append
+        pacing._last_request = pacing._clock()
+        pacing.wait_turn()
+    breaks = [gap for gap in gaps if gap > 2]
+    assert 20 < len(breaks) < 100
+    assert average_gap(1.0, 0.0) == pytest.approx(1.125)
+
+
+def test_a_page_followed_from_another_says_so(forum: MockForum):
+    polite = fetcher(Waits())
+    polite.get(forum.url)
+    polite.get(forum.url + "forums/general.2/", referer=forum.url)
+    typed, followed = forum.hits
+    assert "Referer" not in typed.headers
+    assert followed.headers["Referer"] == forum.url
+    assert followed.headers["Sec-Fetch-Site"] == "same-origin"
 
 
 def test_a_busy_site_is_retried_with_its_retry_after(forum: MockForum):

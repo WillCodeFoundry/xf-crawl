@@ -25,7 +25,9 @@ def test_dr3_the_network_is_reached_only_through_its_doors():
     assert modules_importing("requests") == {
         "fetching.py", "proxy.py", "tunnelbear/account.py", "tunnelbear/rotation.py",
         "commands/crawl.py", "commands/tunnelbear.py",   # composition roots: they build the sessions
+        "visitor.py",                                    # the session's cookie jar, kept between runs
     }
+    assert "from requests.cookies import RequestsCookieJar" in (SOURCE / "visitor.py").read_text()
 
 
 def test_dr3_only_mining_parses_html_with_beautifulsoup():
