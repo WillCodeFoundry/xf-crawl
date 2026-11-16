@@ -16,6 +16,7 @@ from typing import Protocol
 import requests
 
 from xfcrawl.browser import followed_from
+from xfcrawl.cookie_check import asked_for
 from xfcrawl.proxy import ProxyDown, ProxyRoute, refused_credentials
 
 DEFAULT_DELAY = 1.0
@@ -103,6 +104,12 @@ class PoliteFetcher:
         self._route = route
 
     def get(self, url: str, referer: str | None = None) -> Response:
+        response = self._get(url, referer)
+        if response.status != 200 and self._set_asked_cookie(response):
+            response = self._get(url, referer)  # what a browser does without anyone noticing
+        return response
+
+    def _get(self, url: str, referer: str | None) -> Response:
         headers = followed_from(referer)
         retry_wait = max(self.pacing.delay, 1.0) * 2
         tries = proxy_failures = 0
@@ -143,6 +150,15 @@ class PoliteFetcher:
             self.pacing.pause(retry_wait)
             retry_wait = min(retry_wait * 2, _LONGEST_RETRY_WAIT)
 
+    def _set_asked_cookie(self, response: Response) -> bool:
+        """Whether ``response`` is a page checking for a browser by asking for a cookie; if so, the cookie
+        is set, so that asking again gets the page."""
+        cookie = asked_for(response.text, response.url)
+        if cookie is None:
+            return False
+        self._session.cookies.set(cookie.name, cookie.value, domain=cookie.domain, path=cookie.path)
+        _LOGGER.info("    the site asked for cookie %s (HTTP %d); set it, asking again", cookie.name, response.status)
+        return True
 
 
 def _checked(proxies: dict[str, str]) -> dict[str, str]:

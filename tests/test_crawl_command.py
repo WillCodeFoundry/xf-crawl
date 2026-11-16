@@ -230,3 +230,24 @@ def test_deleted_threads_show_the_site_is_still_answering(forum, xf):
     result = xf("crawl", forum.url, "--give-up-after", "0")
     assert result.code == 0, result.out
     assert forum.count("/threads/thread-13.13/") == 1
+
+
+def test_a_sites_script_check_is_answered_as_a_browser_would(forum, xf):
+    forum.checks_for_scripts = True
+    result = xf("crawl", forum.url)
+    assert result.code == 0, result.out
+    assert len(stored()) == 18
+    assert sum(1 for hit in forum.hits if "human=1" not in hit.headers.get("Cookie", "")) == 2   # robots, then /
+    assert "the site asked for cookie human (HTTP 418)" in result.err
+    forum.hits.clear()
+    (THREADS / "thread-12.12" / "page-0002.html.gz").unlink()
+    xf("crawl")                                                    # the cookie is kept for the next run
+    assert forum.hits
+    assert all(set(hit.headers["Cookie"].split("; ")) == {"xf_session=s1", "human=1"} for hit in forum.hits)
+
+
+def test_a_site_still_refusing_with_its_cookie_is_asked_only_twice_a_page(forum, xf):
+    forum.checks_for_scripts = forum.refuses_even_with_cookie = True
+    result = xf("crawl", forum.url, "--ignore-robots")
+    assert [hit.path for hit in forum.hits] == ["/", "/"]
+    assert "0 downloaded, 1 errors" in result.out
