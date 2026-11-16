@@ -8,7 +8,7 @@ are for people and change when a forum or thread is renamed.
 import re
 from dataclasses import dataclass
 from enum import Enum
-from urllib.parse import unquote
+from urllib.parse import unquote, urljoin, urlsplit
 
 
 class Kind(str, Enum):
@@ -111,6 +111,17 @@ def normalize(url: str) -> str:
     path, query = url.split("?", 1)
     route = query.split("&", 1)[0]
     return f"{path}?{route}" if route.startswith(("threads/", "forums/")) else path
+
+
+def resolve(base: str, href: str) -> str | None:
+    """``href`` from a page at ``base``, as a full URL; None if it can't be read, as a link a post writes
+    with a stray bracket in its host (``http://[oops``), which a browser would ignore too."""
+    try:
+        joined = urljoin(base, href)
+        urlsplit(joined)
+    except ValueError:
+        return None
+    return joined
 
 
 def parse_page_url(url: str) -> PageLink | None:

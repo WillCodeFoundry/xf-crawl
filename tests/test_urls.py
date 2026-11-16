@@ -1,6 +1,6 @@
 import pytest
 
-from xfcrawl.urls import INDEX_PAGE, ItemRef, Kind, PageRef, normalize, page_url, parse_page_url, slug_of
+from xfcrawl.urls import INDEX_PAGE, ItemRef, Kind, PageRef, normalize, page_url, parse_page_url, resolve, slug_of
 
 
 @pytest.mark.parametrize(("url", "ref", "first_page_url"), [
@@ -90,3 +90,15 @@ def test_a_forum_known_only_by_number_gets_an_address_from_the_start_url():
                      Backoff(RetryPolicy(), datetime.now(timezone.utc)), frozenset({46}))
     plan.rebuild()
     assert plan.url_of(ItemRef(Kind.FORUM, 46).page(1)) == "https://forum.example/forums/46/"
+
+
+@pytest.mark.parametrize("href", ["http://[oops", "https://x]/threads/y.1/", "http://[1.2.3.4]/", "//[/a"])
+def test_a_link_no_parser_can_read_resolves_to_nothing(href):
+    assert resolve("https://forum.example.com/threads/a.1/", href) is None
+
+
+def test_links_resolve_against_their_page():
+    page = "https://forum.example.com/threads/a.1/page-2"
+    assert resolve(page, "page-3") == "https://forum.example.com/threads/a.1/page-3"
+    assert resolve(page, "/forums/b.2/") == "https://forum.example.com/forums/b.2/"
+    assert resolve(page, "http://[::1]/x") == "http://[::1]/x"
