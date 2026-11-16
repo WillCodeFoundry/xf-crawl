@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 THREADS = {10: 7, 11: 1, 12: 2, 13: 1, 14: 1, 20: 1, 21: 1}
 FORUMS = {2: ("General", "general", [10, 11, 12, 13, 14], [5]), 5: ("Sub", "sub", [20, 21], [])}
 PER_LISTING = 3
+SCRIPT_CHECK = '<script>document.cookie = "human=1; Path=/;"; window.location.reload();</script>'
 POSTS_PER_PAGE = 20
 _FORUM_PATH = re.compile(r"/forums/(?:([a-z-]+)\.)?(\d+)/(?:page-(\d+))?")
 _THREAD_PATH = re.compile(r"/threads/(?:([a-z0-9-]+)\.)?(\d+)/(?:page-(\d+))?")
@@ -42,6 +43,9 @@ class Hit:
 class MockForum:
     gone: set[int] = field(default_factory=set)
     forbidden: set[int] = field(default_factory=set)
+    checks_for_scripts: bool = False
+    """Answer 418 and a script setting a cookie, as WordReference does, until the cookie is sent."""
+    refuses_even_with_cookie: bool = False
     error_once: set[int] = field(default_factory=set)
     busy_once: set[int] = field(default_factory=set)
     slugs: dict[int, str] = field(default_factory=dict)
@@ -57,7 +61,7 @@ class MockForum:
 
             def do_GET(self) -> None:
                 forum.hits.append(Hit(self.path, self.headers.get("X-Test-Proxy") == "1", dict(self.headers.items())))
-                code, body, headers = forum.respond(self.path)
+                code, body, headers = forum.respond(self.path, self.headers.get("Cookie", ""))
                 self.send_response(code)
                 for name, value in headers.items():
                     self.send_header(name, value)
@@ -88,7 +92,13 @@ class MockForum:
         return self.slugs.get(thread_id, f"thread-{thread_id}")
 
     # -- pages --------------------------------------------------------------------------------------
-    def respond(self, path: str) -> Reply:
+    def respond(self, path: str, cookies: str = "") -> Reply:
+        checked = self.checks_for_scripts and path != "/robots.txt"
+        if checked and ("human=1" not in cookies or self.refuses_even_with_cookie):
+            return 418, SCRIPT_CHECK, {"Content-Type": "text/html"}
+        return self._respond(path)
+
+    def _respond(self, path: str) -> Reply:
         if path == "/robots.txt":
             return (404, "", {}) if self.robots is None else (200, self.robots, {})
         if path == "/":                             # like XenForo, which sets a session cookie
