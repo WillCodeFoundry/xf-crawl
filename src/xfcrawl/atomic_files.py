@@ -11,7 +11,7 @@ from pathlib import Path
 PARTIAL_PREFIX = "."
 
 
-def atomic_write(target: Path, content: bytes) -> None:
+def atomic_write(target: Path, content: bytes, mode: int = 0o644) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     descriptor, partial_name = tempfile.mkstemp(dir=target.parent, prefix=f"{PARTIAL_PREFIX}{target.name}.")
     partial = Path(partial_name)
@@ -20,7 +20,7 @@ def atomic_write(target: Path, content: bytes) -> None:
             partial_file.write(content)
             partial_file.flush()
             os.fsync(partial_file.fileno())
-        partial.chmod(0o644)
+        partial.chmod(mode)
         os.replace(partial, target)
     finally:
         partial.unlink(missing_ok=True)

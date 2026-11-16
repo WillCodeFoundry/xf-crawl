@@ -16,7 +16,6 @@ from urllib.parse import urlparse
 import requests
 
 from xfcrawl import config, migration
-from xfcrawl.browser import Browser
 from xfcrawl.commands.tunnelbear import ask_for_credentials, open_account
 from xfcrawl.config import CrawlConfig, ProxySetting, TunnelBearProxy, UrlProxy
 from xfcrawl.crawler import Connection, Crawl, CrawlSummary, connect
@@ -30,6 +29,7 @@ from xfcrawl.proxy import FixedProxy, ProxyRoute, proxied_session
 from xfcrawl.store import PageStore
 from xfcrawl.tunnelbear.account import Credentials
 from xfcrawl.tunnelbear.rotation import ServerRotation
+from xfcrawl.visitor import Visitor, VisitorFile
 
 _LOGGER = logging.getLogger(__name__)
 _AUTO_COUNTRY = "auto"
@@ -55,6 +55,8 @@ def add_parser(subparsers: "argparse._SubParsersAction[argparse.ArgumentParser]"
     parser.add_argument("--retry-failed", action="store_true", help="retry failed pages now, without waiting")
     parser.add_argument("--cookie", help="a Cookie header, to crawl as a logged-in user")
     parser.add_argument("--ignore-robots", action="store_true", help="don't read or obey robots.txt")
+    parser.add_argument("--new-browser", action="store_true",
+                        help="pass for a new browser, without the site's cookies, from now on")
     route = parser.add_mutually_exclusive_group()
     route.add_argument("--tunnelbear", nargs="?", const=_AUTO_COUNTRY, metavar="COUNTRY",
                        help="go through TunnelBear, in COUNTRY (e.g. FR) or the closest region; remembered")
@@ -80,9 +82,20 @@ def main(args: argparse.Namespace) -> int:
     rebuilt = plan.rebuild()
     _LOGGER.info("%s pages stored; links of %s from the link index, %s read from the pages", store.stored_count(),
                  rebuilt.from_index, rebuilt.from_pages)
+    visitor_file = VisitorFile(layout.visitor_file)
+    if args.new_browser:
+        visitor_file.forget()
+    visitor = visitor_file.load(random.Random(), date.today())
+    visitor_file.save(visitor)
+    back = f"back with {len(visitor.cookies)} cookies" if visitor.returning else "visiting for the first time"
+    _LOGGER.info("Passing for %s, %s", visitor.browser.describe(), back)
     credentials = ask_for_credentials(os.environ, interactive=sys.stdin.isatty())
-    open_connection = partial(connect_to_site, crawl_config, layout, args, os.environ, credentials)
-    summary = Crawl(plan, store, open_connection, _now, time.monotonic).run(max_fetches=args.max_fetches)
+    open_route = partial(proxy_route, crawl_config.proxy, layout, os.environ, credentials)
+    open_connection = partial(connect_to_site, crawl_config, args, os.environ, open_route, visitor)
+    try:
+        summary = Crawl(plan, store, open_connection, _now, time.monotonic).run(max_fetches=args.max_fetches)
+    finally:
+        visitor_file.save(visitor)
     print("\n".join(report(summary)))
     return 0
 
@@ -159,17 +172,16 @@ def check_forum_url(url: str) -> None:
 
 def connect_to_site(
     crawl_config: CrawlConfig,
-    layout: StoreLayout,
     args: argparse.Namespace,
     environment: Mapping[str, str],
-    credentials: Callable[[], Credentials],
+    open_route: Callable[[], ProxyRoute | None],
+    visitor: Visitor,
 ) -> Connection:
-    """The fetcher for this crawl, through its proxy if it has one, and the site's robots.txt."""
-    route = proxy_route(crawl_config.proxy, layout, environment, credentials)
+    """The fetcher for this crawl, through its proxy if it has one, as ``visitor``, and the site's robots.txt."""
+    route = open_route()
     session = requests.Session() if route is None else proxied_session(environment.get("REQUESTS_CA_BUNDLE"))
-    browser = Browser.pick(random.Random(), date.today())
-    session.headers.update(browser.headers)
-    _LOGGER.info("Passing for %s", browser.describe())
+    session.headers.update(visitor.browser.headers)
+    session.cookies = visitor.cookies
     if args.cookie:
         session.headers["Cookie"] = args.cookie
     if route is not None:

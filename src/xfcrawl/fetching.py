@@ -15,6 +15,7 @@ from typing import Protocol
 
 import requests
 
+from xfcrawl.browser import followed_from
 from xfcrawl.proxy import ProxyDown, ProxyRoute, refused_credentials
 
 DEFAULT_DELAY = 1.0
@@ -23,6 +24,10 @@ _RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 _TRIES = 5
 _TIMEOUT_SECONDS = 30
 _LONGEST_RETRY_WAIT = 300.0
+BREAK_CHANCE = 0.01
+"""How often a gap between requests is a break, as when someone stops to read."""
+BREAK_LENGTH = (5.0, 20.0)
+"""How long a break lasts, in delays: 5 to 20 seconds with the usual one-second delay."""
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -45,14 +50,20 @@ class FetchFailed(Exception):
 
 
 class Fetcher(Protocol):
-    def get(self, url: str) -> Response:
-        """The site's answer; raises FetchFailed or ProxyDown."""
+    def get(self, url: str, referer: str | None = None) -> Response:
+        """The site's answer, asked for as if following a link on ``referer``; raises FetchFailed or
+        ProxyDown."""
         ...
 
 
+def average_gap(delay: float, jitter: float) -> float:
+    """The seconds between requests on average, breaks included."""
+    return delay + jitter / 2 + BREAK_CHANCE * delay * sum(BREAK_LENGTH) / 2
+
+
 class Pacing:
-    """How requests are spaced out: ``delay`` plus up to ``jitter`` seconds between one and the next.
-    ``pause`` and ``clock`` are the seams for tests that shouldn't wait."""
+    """How requests are spaced out: ``delay`` plus up to ``jitter`` seconds between one and the next, and now
+    and then a break of several delays. ``pause``, ``clock`` and ``rng`` are the seams for tests."""
 
     def __init__(
         self,
@@ -60,12 +71,13 @@ class Pacing:
         jitter: float,
         pause: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
+        rng: random.Random | None = None,
     ) -> None:
         self.delay = delay
         self._jitter = jitter
         self.pause = pause
         self._clock = clock
-        self._rng = random.Random()
+        self._rng = rng or random.Random()
         self._last_request = float("-inf")
 
     def slow_down_to(self, delay: float) -> None:
@@ -73,7 +85,10 @@ class Pacing:
         self.delay = max(self.delay, delay)
 
     def wait_turn(self) -> None:
-        wait = self._last_request + self.delay + self._rng.uniform(0, self._jitter) - self._clock()
+        gap = self.delay + self._rng.uniform(0, self._jitter)
+        if self._rng.random() < BREAK_CHANCE:
+            gap += self.delay * self._rng.uniform(*BREAK_LENGTH)
+        wait = self._last_request + gap - self._clock()
         if wait > 0:
             self.pause(wait)
 
@@ -87,7 +102,8 @@ class PoliteFetcher:
         self.pacing = pacing
         self._route = route
 
-    def get(self, url: str) -> Response:
+    def get(self, url: str, referer: str | None = None) -> Response:
+        headers = followed_from(referer)
         retry_wait = max(self.pacing.delay, 1.0) * 2
         tries = proxy_failures = 0
         while True:
@@ -96,7 +112,7 @@ class PoliteFetcher:
             route = self._route
             proxies = None if route is None else _checked(route.proxies())
             try:
-                response = self._session.get(url, timeout=_TIMEOUT_SECONDS, proxies=proxies)
+                response = self._session.get(url, headers=headers, timeout=_TIMEOUT_SECONDS, proxies=proxies)
             except (requests.exceptions.ProxyError, requests.exceptions.SSLError) as error:
                 self.pacing.request_done()
                 if route is None:

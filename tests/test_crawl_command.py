@@ -159,7 +159,47 @@ def test_it_passes_for_one_browser_for_the_whole_run(forum, xf):
     agent = agents.pop()
     assert agent.startswith("Mozilla/5.0 (") and "xf-crawl" not in agent
     assert all(hit.headers["Accept"].startswith("text/html") for hit in forum.hits)
-    assert "Passing for " in result.err
+    assert "visiting for the first time" in result.err
+
+
+def test_it_comes_back_as_the_same_visitor_with_the_sites_cookies(forum, xf):
+    xf("crawl", forum.url, "--max-fetches", "3")
+    first_agent = forum.hits[-1].headers["User-Agent"]
+    assert forum.hits[-1].headers["Cookie"] == "xf_session=s1"     # kept within a run
+    visitor = STORE / "visitor.json"
+    assert visitor.stat().st_mode & 0o777 == 0o600
+    assert json.loads(visitor.read_text())["cookies"][0]["value"] == "s1"
+    forum.hits.clear()
+    result = xf("crawl")
+    assert {hit.headers["User-Agent"] for hit in forum.hits} == {first_agent}
+    assert forum.hits[0].headers["Cookie"] == "xf_session=s1"      # and from run to run
+    assert "back with 1 cookies" in result.err
+
+
+def test_new_browser_forgets_the_browser_and_the_cookies(forum, xf):
+    xf("crawl", forum.url, "--max-fetches", "3")
+    forum.hits.clear()
+    xf("crawl", "--new-browser", "--max-fetches", "1")
+    assert "Cookie" not in forum.hits[0].headers
+
+
+def test_a_damaged_visitor_file_is_explained(forum, xf):
+    xf("crawl", forum.url, "--max-fetches", "1")
+    (STORE / "visitor.json").write_text("{")
+    result = xf("crawl")
+    assert result.code == 1
+    assert "--new-browser" in result.err
+
+
+def test_each_page_names_the_page_a_person_would_come_from(forum, xf):
+    xf("crawl", forum.url)
+    referers = {hit.path: hit.headers.get("Referer", "").removeprefix(forum.url.rstrip("/")) for hit in forum.hits}
+    assert referers["/"] == ""
+    assert referers["/forums/general.2/"] == "/"
+    assert referers["/forums/general.2/page-2"] == "/forums/general.2/"
+    assert referers["/threads/thread-10.10/"] == "/forums/general.2/"
+    assert referers["/threads/thread-10.10/page-3"] == "/threads/thread-10.10/page-2"
+    assert referers["/threads/thread-20.20/"] == "/forums/sub.5/"
 
 
 def test_a_second_run_plans_from_the_link_index(forum, xf):

@@ -90,8 +90,8 @@ class MockForum:
     def respond(self, path: str) -> Reply:
         if path == "/robots.txt":
             return (404, "", {}) if self.robots is None else (200, self.robots, {})
-        if path == "/":
-            return 200, _page("forum_list", "Forums", _FORUM_LIST), {}
+        if path == "/":                             # like XenForo, which sets a session cookie
+            return 200, _page("forum_list", "Forums", _FORUM_LIST), {"Set-Cookie": "xf_session=s1; path=/"}
         forum = _FORUM_PATH.fullmatch(path)
         if forum and int(forum[2]) in FORUMS:
             slug = FORUMS[int(forum[2])][1]

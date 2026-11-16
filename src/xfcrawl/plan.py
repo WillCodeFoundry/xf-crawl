@@ -226,6 +226,16 @@ class CrawlPlan:
             return self._start_url
         return page_url(self._first_page_url(ref.item), ref.page)
 
+    def referer_of(self, ref: PageRef) -> str | None:
+        """The page a person would come to ``ref`` from: the page before it, the forum listing a thread, or
+        the forum index. Worked out, not remembered, so it costs no memory."""
+        if ref.kind is Kind.INDEX:
+            return None
+        if ref.page > 1:
+            return self.url_of(PageRef(ref.kind, ref.item_id, ref.page - 1))
+        forum = self.listed_in(ref.item)
+        return self._start_url if forum is None else self.url_of(PageRef(forum.kind, forum.item_id, 1))
+
     def slug(self, item: ItemRef) -> str | None:
         path = self._first_page_paths.get(item)
         return slug_of(self._origin + path) if path else None

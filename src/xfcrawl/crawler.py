@@ -126,7 +126,7 @@ class Crawl:
                 continue
             _LOGGER.info("GET %-20s %s", ref.key, url)
             try:
-                response = connection.fetcher.get(url)
+                response = connection.fetcher.get(url, self.plan.referer_of(ref))
             except ProxyDown as error:
                 self.plan.put_back(ref)
                 summary.stopped = f"proxy not working (nothing recorded against {ref.key}): {error}"

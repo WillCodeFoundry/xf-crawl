@@ -73,6 +73,11 @@ class StoreLayout:
         return self.root / "links.jsonl"
 
     @property
+    def visitor_file(self) -> Path:
+        """The browser the crawl passes for and the site's cookies, kept from run to run."""
+        return self.root / "visitor.json"
+
+    @property
     def tunnelbear_tokens(self) -> Path:
         return self.root / "tunnelbear.json"
 

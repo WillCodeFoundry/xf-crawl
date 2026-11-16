@@ -6,13 +6,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from xfcrawl import migration, progress
-from xfcrawl.fetching import DEFAULT_DELAY, DEFAULT_JITTER
+from xfcrawl.fetching import DEFAULT_DELAY, DEFAULT_JITTER, average_gap
 from xfcrawl.layout import StoreLayout
 from xfcrawl.progress import Estimate, Progress
 from xfcrawl.stored_crawl import open_stored_crawl
 from xfcrawl.urls import Stage
 
-_DEFAULT_PACE = DEFAULT_DELAY + DEFAULT_JITTER / 2
+_DEFAULT_PACE = average_gap(DEFAULT_DELAY, DEFAULT_JITTER)
 _STAGE_NOTES = {Stage.THREAD_OTHER_PAGES: "so far"}
 _SECONDS_PER = (("day", 86400), ("hour", 3600), ("minute", 60))
 

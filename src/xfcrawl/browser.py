@@ -1,12 +1,13 @@
 """The browser the crawler passes for: a user agent and the headers that go with it, picked at random.
 
 ``Browser.pick`` chooses a common browser and system, with a version near the one current on the day, so the
-user agent doesn't age as the code does. The other headers match what that browser sends for a page opened
-from the address bar. One browser is picked per run and kept for every request, as a person's browser would be.
+user agent doesn't age as the code does. The other headers match what that browser sends for a page; opened
+from a link on the site, a page also gets ``followed_from``'s headers. A crawl keeps its browser from run to
+run (see ``visitor.py``), updating it as browsers update themselves.
 """
 
 import random
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import date
 
 # A release of each browser, and how often a new major version comes out. Versions are worked out from these,
@@ -47,11 +48,14 @@ _CHROME_ACCEPT = ("text/html,application/xhtml+xml,application/xml;q=0.9,image/a
 @dataclass(frozen=True, slots=True)
 class Browser:
     name: str
+    """Chrome, Edge, Firefox or Safari."""
     system: str
+    """Windows, macOS or Linux."""
     version: int
-    user_agent: str
-    headers: dict[str, str]
-    """Every header to send with a page request, the user agent included."""
+    language: str
+    """The Accept-Language header."""
+    minor: int = 0
+    """Safari's minor version; the others show only a major one."""
 
     def describe(self) -> str:
         return f"{self.name} {self.version} on {self.system}"
@@ -59,13 +63,70 @@ class Browser:
     @classmethod
     def pick(cls, rng: random.Random, today: date) -> "Browser":
         name, system, _ = rng.choices(_CHOICES, weights=[weight for *_, weight in _CHOICES])[0]
-        language = rng.choice(_LANGUAGES)
-        behind = rng.choices((0, 1, 2), weights=(6, 3, 1))[0]
-        if name == "Firefox":
-            return _firefox(system, current_version(_FIREFOX_RELEASE, today) - behind, language)
-        if name == "Safari":
-            return _safari(safari_version(today), rng.choice((0, 1, 2, 3, 4)), language)
-        return _chromium(name, system, current_version(_CHROME_RELEASE, today) - behind, language)
+        browser = cls(name, system, 0, rng.choice(_LANGUAGES))
+        return browser.updated(rng, today, force=True)
+
+    def updated(self, rng: random.Random, today: date, *, force: bool = False) -> "Browser":
+        """The same browser, updated once it falls behind, as browsers update themselves: Safari when a new
+        major version comes out each year, the others when more than two of their monthly versions behind.
+        ``force`` updates it anyway. Chrome, Edge and Firefox may end up the latest or one or two behind."""
+        if self.name == "Safari":
+            newest, behind, allowed = safari_version(today), 0, 0
+        else:
+            newest = current_version(_FIREFOX_RELEASE if self.name == "Firefox" else _CHROME_RELEASE, today)
+            behind, allowed = rng.choices((0, 1, 2), weights=(6, 3, 1))[0], 2
+        if not force and self.version >= newest - allowed:
+            return self
+        minor = rng.choice((0, 1, 2, 3, 4)) if self.name == "Safari" else 0
+        return replace(self, version=newest - behind, minor=minor)
+
+    @property
+    def user_agent(self) -> str:
+        if self.name == "Firefox":
+            platform = {"Windows": _WINDOWS, "macOS": _FIREFOX_MAC, "Linux": _LINUX}[self.system]
+            return f"Mozilla/5.0 ({platform}; rv:{self.version}.0) Gecko/20100101 Firefox/{self.version}.0"
+        if self.name == "Safari":
+            return (f"Mozilla/5.0 ({_MAC}) AppleWebKit/605.1.15 (KHTML, like Gecko) "
+                    f"Version/{self.version}.{self.minor} Safari/605.1.15")
+        platform = {"Windows": _WINDOWS, "macOS": _MAC, "Linux": _LINUX}[self.system]
+        agent = (f"Mozilla/5.0 ({platform}) AppleWebKit/537.36 (KHTML, like Gecko) "
+                 f"Chrome/{self.version}.0.0.0 Safari/537.36")
+        return agent + f" Edg/{self.version}.0.0.0" if self.name == "Edge" else agent
+
+    @property
+    def headers(self) -> dict[str, str]:
+        """Every header to send with a page typed into the address bar, the user agent included."""
+        return {
+            "User-Agent": self.user_agent,
+            "Accept": _HTML_ACCEPT if self.name in ("Firefox", "Safari") else _CHROME_ACCEPT,
+            "Accept-Language": self.language,
+            "Upgrade-Insecure-Requests": "1",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1",
+        }
+
+    def to_json(self) -> dict[str, object]:
+        return asdict(self)
+
+    @classmethod
+    def from_json(cls, data: object) -> "Browser":
+        """A browser saved by ``to_json``; raises ValueError if it isn't one."""
+        if not isinstance(data, dict):
+            raise ValueError("not an object")
+        name, system, version = data.get("name"), data.get("system"), data.get("version")
+        language, minor = data.get("language"), data.get("minor", 0)
+        if (name, system) not in {(n, s) for n, s, _ in _CHOICES}:
+            raise ValueError(f"unknown browser {name!r} on {system!r}")
+        if not isinstance(version, int) or not isinstance(minor, int) or not isinstance(language, str):
+            raise ValueError("version, minor or language missing")
+        return cls(str(name), str(system), version, language, minor)
+
+
+def followed_from(referer: str | None) -> dict[str, str]:
+    """The headers that change when a page is opened from a link on another page of the site."""
+    return {} if referer is None else {"Referer": referer, "Sec-Fetch-Site": "same-origin"}
 
 
 def current_version(release: tuple[int, date], today: date) -> int:
@@ -76,37 +137,3 @@ def current_version(release: tuple[int, date], today: date) -> int:
 def safari_version(today: date) -> int:
     """Safari 26 came with the systems of September 2025, and a new major version comes every September."""
     return today.year - 1999 - (today.month < _SAFARI_SHIPS_IN_SEPTEMBER)
-
-
-def _chromium(name: str, system: str, version: int, language: str) -> Browser:
-    platform = {"Windows": _WINDOWS, "macOS": _MAC, "Linux": _LINUX}[system]
-    user_agent = (f"Mozilla/5.0 ({platform}) AppleWebKit/537.36 (KHTML, like Gecko) "
-                  f"Chrome/{version}.0.0.0 Safari/537.36")
-    if name == "Edge":
-        user_agent += f" Edg/{version}.0.0.0"
-    return Browser(name, system, version, user_agent, _headers(user_agent, _CHROME_ACCEPT, language))
-
-
-def _firefox(system: str, version: int, language: str) -> Browser:
-    platform = {"Windows": _WINDOWS, "macOS": _FIREFOX_MAC, "Linux": _LINUX}[system]
-    user_agent = f"Mozilla/5.0 ({platform}; rv:{version}.0) Gecko/20100101 Firefox/{version}.0"
-    return Browser("Firefox", system, version, user_agent, _headers(user_agent, _HTML_ACCEPT, language))
-
-
-def _safari(version: int, minor: int, language: str) -> Browser:
-    user_agent = (f"Mozilla/5.0 ({_MAC}) AppleWebKit/605.1.15 (KHTML, like Gecko) "
-                  f"Version/{version}.{minor} Safari/605.1.15")
-    return Browser("Safari", "macOS", version, user_agent, _headers(user_agent, _HTML_ACCEPT, language))
-
-
-def _headers(user_agent: str, accept: str, language: str) -> dict[str, str]:
-    return {
-        "User-Agent": user_agent,
-        "Accept": accept,
-        "Accept-Language": language,
-        "Upgrade-Insecure-Requests": "1",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-        "Sec-Fetch-User": "?1",
-    }

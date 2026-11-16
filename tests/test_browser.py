@@ -4,6 +4,8 @@ import random
 import re
 from datetime import date
 
+import pytest
+
 from xfcrawl.browser import Browser, current_version, safari_version
 
 TODAY = date(2026, 11, 16)
@@ -66,3 +68,25 @@ def test_safari_moves_on_each_september():
     assert safari_version(date(2025, 8, 31)) == 25
     assert safari_version(date(2025, 9, 1)) == 26
     assert safari_version(date(2026, 11, 16)) == 27
+
+
+def test_a_saved_browser_updates_itself_once_it_falls_behind():
+    rng = random.Random(2)
+    chrome = Browser("Chrome", "Windows", 140, "en-US,en;q=0.9")
+    newest = current_version((136, date(2025, 4, 29)), TODAY)
+    assert chrome.updated(rng, TODAY).version >= newest - 2
+    current = Browser("Chrome", "Windows", newest - 1, "en-US,en;q=0.9")
+    assert current.updated(rng, TODAY) is current
+    safari = Browser("Safari", "macOS", 25, "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7", minor=3)
+    updated = safari.updated(rng, TODAY)
+    assert (updated.version, updated.language) == (27, safari.language)
+
+
+def test_a_browser_survives_saving_and_bad_ones_are_refused():
+    for browser in picks(30):
+        assert Browser.from_json(browser.to_json()) == browser
+    bad_ones: list[object] = [[], {"name": "Lynx", "system": "Linux", "version": 2, "language": "en"},
+                              {"name": "Chrome", "system": "Windows", "version": "140", "language": "en"}]
+    for bad in bad_ones:
+        with pytest.raises(ValueError, match=r"not an object|unknown browser|missing"):
+            Browser.from_json(bad)
