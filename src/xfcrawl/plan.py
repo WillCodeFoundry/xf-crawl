@@ -23,7 +23,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from datetime import datetime
 from itertools import groupby
-from urllib.parse import urljoin, urlparse, urlsplit
+from urllib.parse import urlparse, urlsplit
 
 from xfcrawl import xenforo
 from xfcrawl.failures import Backoff, RetryPolicy
@@ -39,6 +39,7 @@ from xfcrawl.urls import (
     bare_first_page_url,
     page_url,
     parse_page_url,
+    resolve,
     site_prefix,
     slug_of,
 )
@@ -150,7 +151,8 @@ class CrawlPlan:
         its links to its own pages (its page navigation). Grouped by forum or thread."""
         grouped: dict[ItemRef, ItemLink] = {}
         for href in xenforo.links(page_html):
-            link = self._on_this_site(urljoin(url, href))
+            full_url = resolve(url, href)
+            link = None if full_url is None else self._on_this_site(full_url)
             if link is None or (ref.kind is Kind.THREAD and link.ref.item != ref.item):
                 continue
             known = grouped.get(link.ref.item)

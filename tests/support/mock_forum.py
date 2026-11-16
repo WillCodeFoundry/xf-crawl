@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 THREADS = {10: 7, 11: 1, 12: 2, 13: 1, 14: 1, 20: 1, 21: 1}
 FORUMS = {2: ("General", "general", [10, 11, 12, 13, 14], [5]), 5: ("Sub", "sub", [20, 21], [])}
 PER_LISTING = 3
+BROKEN_LINKS = '<a href="http://[oops">a</a><a href="https://x]/threads/y.1/">b</a><a href="http://[1.2.3.4]/">c</a>'
+"""Links as posts sometimes write them, which no URL parser can read; on every forum and thread page."""
 SCRIPT_CHECK = '<script>document.cookie = "human=1; Path=/;"; window.location.reload();</script>'
 POSTS_PER_PAGE = 20
 _FORUM_PATH = re.compile(r"/forums/(?:([a-z-]+)\.)?(\d+)/(?:page-(\d+))?")
@@ -117,7 +119,7 @@ class MockForum:
     def _forum(self, forum_id: int, page: int) -> Reply:
         title, slug, thread_ids, subforums = FORUMS[forum_id]
         last = -(-len(thread_ids) // PER_LISTING)
-        body = ""
+        body = BROKEN_LINKS
         if page == 1:
             body += "".join(f'<h3 class="node-title"><a href="/forums/{FORUMS[s][1]}.{s}/">{FORUMS[s][0]}</a></h3>'
                             for s in subforums)
@@ -141,7 +143,8 @@ class MockForum:
         if page > last:
             return 301, "", {"Location": f"{base}page-{last}"}
         canonical = f'<link rel="canonical" href="{self.url.rstrip("/")}{base}{"" if page == 1 else f"page-{page}"}">'
-        posts = '<article class="message message--post">post</article>' * (POSTS_PER_PAGE if page < last else 7)
+        posts = f'<article class="message message--post">post {BROKEN_LINKS}</article>' * (
+            POSTS_PER_PAGE if page < last else 7)
         return 200, _page("thread_view", f"Thread {thread_id}", canonical + posts + _navigation(base, page, last)), {}
 
     def _misbehave_once(self, thread_id: int) -> Reply:

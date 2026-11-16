@@ -3,12 +3,11 @@
 from collections import Counter
 from dataclasses import asdict, dataclass, field
 from typing import Any
-from urllib.parse import urljoin
 
 from xfcrawl.mining import pages
 from xfcrawl.plan import CrawlPlan
 from xfcrawl.store import PageStore
-from xfcrawl.urls import ItemRef, Kind, parse_page_url
+from xfcrawl.urls import ItemRef, Kind, parse_page_url, resolve
 
 
 @dataclass
@@ -90,7 +89,8 @@ def _forums(start_url: str, store: PageStore, plan: CrawlPlan) -> tuple[dict[int
             if ref.page == 1:
                 title = pages.title(page)
             for thread in pages.listed_threads(page):
-                link = parse_page_url(urljoin(start_url, thread.href))
+                full_url = resolve(start_url, thread.href)
+                link = None if full_url is None else parse_page_url(full_url)
                 if link is None or link.ref.kind is not Kind.THREAD or link.ref.item_id in threads_here:
                     continue
                 threads_here.add(link.ref.item_id)
