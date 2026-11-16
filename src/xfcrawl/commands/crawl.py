@@ -18,7 +18,7 @@ import requests
 from xfcrawl import config, migration
 from xfcrawl.commands.tunnelbear import ask_for_credentials, open_account
 from xfcrawl.config import CrawlConfig, ProxySetting, TunnelBearProxy, UrlProxy
-from xfcrawl.crawler import Connection, Crawl, CrawlSummary, connect
+from xfcrawl.crawler import DEFAULT_GIVE_UP_AFTER, Connection, Crawl, CrawlSummary, connect
 from xfcrawl.errors import XfError
 from xfcrawl.failures import Backoff, RetryPolicy
 from xfcrawl.fetching import DEFAULT_DELAY, DEFAULT_JITTER, Pacing, PoliteFetcher
@@ -52,6 +52,9 @@ def add_parser(subparsers: "argparse._SubParsersAction[argparse.ArgumentParser]"
     parser.add_argument("--jitter", type=float, default=DEFAULT_JITTER,
                         help=f"up to this many extra seconds (default {DEFAULT_JITTER})")
     parser.add_argument("--max-fetches", type=int, metavar="N", help="stop after N requests")
+    parser.add_argument("--give-up-after", type=float, default=DEFAULT_GIVE_UP_AFTER, metavar="SECONDS",
+                        help="stop with an error when no page has come through for this long "
+                             f"(default {DEFAULT_GIVE_UP_AFTER:.0f})")
     parser.add_argument("--retry-failed", action="store_true", help="retry failed pages now, without waiting")
     parser.add_argument("--cookie", help="a Cookie header, to crawl as a logged-in user")
     parser.add_argument("--ignore-robots", action="store_true", help="don't read or obey robots.txt")
@@ -93,11 +96,12 @@ def main(args: argparse.Namespace) -> int:
     open_route = partial(proxy_route, crawl_config.proxy, layout, os.environ, credentials)
     open_connection = partial(connect_to_site, crawl_config, args, os.environ, open_route, visitor)
     try:
-        summary = Crawl(plan, store, open_connection, _now, time.monotonic).run(max_fetches=args.max_fetches)
+        crawl = Crawl(plan, store, open_connection, _now, time.monotonic, give_up_after=args.give_up_after)
+        summary = crawl.run(max_fetches=args.max_fetches)
     finally:
         visitor_file.save(visitor)
     print("\n".join(report(summary)))
-    return 0
+    return 1 if summary.failed else 0
 
 
 @dataclass(frozen=True)

@@ -41,6 +41,7 @@ class Hit:
 @dataclass
 class MockForum:
     gone: set[int] = field(default_factory=set)
+    forbidden: set[int] = field(default_factory=set)
     error_once: set[int] = field(default_factory=set)
     busy_once: set[int] = field(default_factory=set)
     slugs: dict[int, str] = field(default_factory=dict)
@@ -121,6 +122,8 @@ class MockForum:
             return 301, "", {"Location": target + (f"page-{page}" if page > 1 else "")}
         if thread_id in self.gone:
             return 404, _page("error", "Oops", "not found"), {}
+        if thread_id in self.forbidden:              # as a site turning a crawler away might
+            return 403, "Forbidden", {}
         if thread_id in self.error_once or thread_id in self.busy_once:
             return self._misbehave_once(thread_id)
         last = THREADS[thread_id]

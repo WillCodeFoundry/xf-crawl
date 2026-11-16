@@ -34,6 +34,7 @@ uv run xf mine                              # statistics (--json for JSON)
   - **Breaks:** about one gap in a hundred is a break of 5 to 20 times `--delay`. That adds about a tenth to a crawl's time.
   - **robots.txt** rules are still matched as `xf-crawl`, falling back to the rules for every robot.
 - **Failures:** a page that can't be fetched is never stored. Its failures are recorded beside it and retried on later runs, waiting longer after each one: 1h, 2h, 4h… for temporary errors, 1d, 2d… for pages that look gone. `--retry-failed` tries them now.
+- **Gives up when nothing comes through:** if no page has been stored for a minute (`--give-up-after SECONDS`), the run stops with an error and exit code 1: the site is down, the route has stopped working, or the crawler is being turned away. A deleted thread or a redirect counts as the site answering normally. A run stopped because the proxy failed also exits with 1.
 
 ### Only some forums
 

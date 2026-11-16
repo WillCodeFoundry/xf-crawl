@@ -207,3 +207,26 @@ def test_a_second_run_plans_from_the_link_index(forum, xf):
     assert "links of 11 from the link index, 0 read from the pages" in xf("crawl").err
     (STORE / "links.jsonl").unlink()
     assert "links of 0 from the link index, 11 read from the pages" in xf("crawl").err
+
+
+def test_it_stops_with_an_error_when_no_page_comes_through_for_too_long(forum, xf):
+    forum.forbidden = {11}
+    result = xf("crawl", forum.url, "--give-up-after", "0")
+    assert result.code == 1
+    assert "Stopped: no page has come through for 0s, the last answer being http-403" in result.out
+    assert forum.count("/threads/thread-12.12/") == 0                 # nothing fetched after it
+    assert "Run xf crawl again to continue." in result.out
+
+
+def test_a_refusal_now_and_then_does_not_stop_it(forum, xf):
+    forum.forbidden = {11}
+    result = xf("crawl", forum.url)
+    assert result.code == 0, result.out
+    assert forum.count("/threads/thread-12.12/") == 1
+
+
+def test_deleted_threads_show_the_site_is_still_answering(forum, xf):
+    forum.gone = {11, 12}
+    result = xf("crawl", forum.url, "--give-up-after", "0")
+    assert result.code == 0, result.out
+    assert forum.count("/threads/thread-13.13/") == 1
