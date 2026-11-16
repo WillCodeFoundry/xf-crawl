@@ -27,6 +27,7 @@ uv run xf mine                              # statistics (--json for JSON)
 - **Level by level:** first the forum list, then every forum's thread list, then every thread's first page, then the threads' other pages. Stop it at any stage and you have everything above it: all forums, then all thread titles, then every thread's opening.
 - **Resumable:** stop it at any time, or let it crash. The next run fetches only what isn't stored yet.
 - **Polite:** about 1 to 1.5 seconds between requests (`--delay`, `--jitter`), robots.txt obeyed (`--ignore-robots` not to), and waits and retries when the site is busy.
+- **Looks like a browser:** each run picks a common desktop browser at random (Chrome, Edge, Firefox or Safari, on Windows, macOS or Linux, a version or two from the latest) and sends its user agent and headers for every request of that run. The first lines of a run say which, e.g. `Passing for Firefox 158 on Linux`. robots.txt rules are still matched as `xf-crawl`, falling back to the rules for every robot.
 - **Failures:** a page that can't be fetched is never stored. Its failures are recorded beside it and retried on later runs, waiting longer after each one: 1h, 2h, 4h… for temporary errors, 1d, 2d… for pages that look gone. `--retry-failed` tries them now.
 
 ### Only some forums

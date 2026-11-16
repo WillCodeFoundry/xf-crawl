@@ -35,6 +35,7 @@ Reply = tuple[int, str, dict[str, str]]
 class Hit:
     path: str
     via_proxy: bool
+    headers: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -54,7 +55,7 @@ class MockForum:
                 pass
 
             def do_GET(self) -> None:
-                forum.hits.append(Hit(self.path, self.headers.get("X-Test-Proxy") == "1"))
+                forum.hits.append(Hit(self.path, self.headers.get("X-Test-Proxy") == "1", dict(self.headers.items())))
                 code, body, headers = forum.respond(self.path)
                 self.send_response(code)
                 for name, value in headers.items():

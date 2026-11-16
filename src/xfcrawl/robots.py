@@ -4,9 +4,11 @@ import logging
 from urllib import robotparser
 from urllib.parse import urlparse
 
-from xfcrawl.fetching import USER_AGENT, Fetcher, FetchFailed
+from xfcrawl.fetching import Fetcher, FetchFailed
 
 _LOGGER = logging.getLogger(__name__)
+ROBOTS_NAME = "xf-crawl"
+"""The name robots.txt rules are matched against: rules for xf-crawl, or else for every robot (``*``)."""
 
 
 class RobotsRules:
@@ -35,10 +37,10 @@ class RobotsRules:
         return cls(parser)
 
     def allows(self, url: str) -> bool:
-        return self._parser is None or self._parser.can_fetch(USER_AGENT, url)
+        return self._parser is None or self._parser.can_fetch(ROBOTS_NAME, url)
 
     def crawl_delay(self) -> float | None:
         if self._parser is None:
             return None
-        delay = self._parser.crawl_delay(USER_AGENT)
+        delay = self._parser.crawl_delay(ROBOTS_NAME)
         return float(delay) if delay is not None else None
