@@ -51,6 +51,8 @@ class MockForum:
     error_once: set[int] = field(default_factory=set)
     busy_once: set[int] = field(default_factory=set)
     slugs: dict[int, str] = field(default_factory=dict)
+    merged: dict[int, int] = field(default_factory=dict)
+    """Thread id -> the thread it was merged into; XenForo redirects the old address there."""
     robots: str | None = None
     hits: list[Hit] = field(default_factory=list)
 
@@ -132,12 +134,9 @@ class MockForum:
         if slug != self.slug(thread_id):            # renamed: XenForo redirects to the new address
             target = f"/threads/{self.slug(thread_id)}.{thread_id}/"
             return 301, "", {"Location": target + (f"page-{page}" if page > 1 else "")}
-        if thread_id in self.gone:
-            return 404, _page("error", "Oops", "not found"), {}
-        if thread_id in self.forbidden:              # as a site turning a crawler away might
-            return 403, "Forbidden", {}
-        if thread_id in self.error_once or thread_id in self.busy_once:
-            return self._misbehave_once(thread_id)
+        trouble = self._trouble(thread_id)
+        if trouble is not None:
+            return trouble
         last = THREADS[thread_id]
         base = f"/threads/{slug}.{thread_id}/"
         if page > last:
@@ -146,6 +145,19 @@ class MockForum:
         posts = f'<article class="message message--post">post {BROKEN_LINKS}</article>' * (
             POSTS_PER_PAGE if page < last else 7)
         return 200, _page("thread_view", f"Thread {thread_id}", canonical + posts + _navigation(base, page, last)), {}
+
+    def _trouble(self, thread_id: int) -> Reply | None:
+        """The answer for a thread that isn't simply there, if it isn't."""
+        if thread_id in self.merged:
+            target = self.merged[thread_id]
+            return 301, "", {"Location": f"/threads/{self.slug(target)}.{target}/"}
+        if thread_id in self.gone:
+            return 404, _page("error", "Oops", "not found"), {}
+        if thread_id in self.forbidden:              # as a site turning a crawler away might
+            return 403, "Forbidden", {}
+        if thread_id in self.error_once or thread_id in self.busy_once:
+            return self._misbehave_once(thread_id)
+        return None
 
     def _misbehave_once(self, thread_id: int) -> Reply:
         if thread_id in self.error_once:

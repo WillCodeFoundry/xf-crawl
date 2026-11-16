@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
-from xfcrawl.failures import Failure, RetryPolicy, parse_failures
+from xfcrawl.failures import Backoff, Failure, RetryPolicy, parse_failures
+from xfcrawl.urls import ItemRef, Kind
 
 T0 = datetime(2026, 11, 9, 16, 0, tzinfo=timezone.utc)
 
@@ -39,3 +40,19 @@ def test_failures_round_trip_as_json_lines():
 def test_a_line_cut_short_by_a_crash_is_skipped():
     text = Failure(T0, "http-503").to_json_line() + '{"time": "2026-11-09T1'
     assert parse_failures(text) == [Failure(T0, "http-503")]
+
+
+def test_a_redirect_to_another_thread_is_a_merge_and_settles_the_page():
+    merged = Failure(T0, "redirect", "http://x/threads/old.11/", "http://x/threads/new-home.13/")
+    past_end = Failure(T0, "redirect", "http://x/threads/a.1/page-9", "http://x/threads/a.1/page-8")
+    renamed_past_end = Failure(T0, "redirect", "http://x/threads/old.1/page-9", "http://x/threads/new.1/page-8")
+    assert merged.merged_into == ItemRef(Kind.THREAD, 13)
+    assert past_end.merged_into is None
+    assert renamed_past_end.merged_into is None
+    assert Failure(T0, "http-404", "http://x/threads/old.11/", "http://x/threads/new.13/").merged_into is None
+    backoff = Backoff(RetryPolicy(), T0)
+    assert backoff.settled([merged])
+    assert not backoff.settled([past_end])
+    assert not backoff.settled([merged, past_end])          # the latest answer counts
+    assert not backoff.settled([])
+    assert not Backoff(RetryPolicy(), T0, ignore=True).settled([merged])

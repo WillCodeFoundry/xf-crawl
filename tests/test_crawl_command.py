@@ -109,6 +109,21 @@ def test_a_link_past_a_threads_end_is_recorded_as_a_redirect(forum, xf):
     assert not (THREADS / "thread-12.12" / "page-0003.html.gz").exists()
 
 
+def test_a_thread_merged_into_another_is_recorded_once_and_not_tried_again(forum, xf):
+    forum.merged = {11: 13}
+    result = xf("crawl", forum.url)
+    assert "thread 11 was merged into or moved to thread 13; not stored, not tried again" in result.err
+    assert reasons(THREADS / "thread-11.11" / "page-0001.failed.jsonl") == ["redirect"]
+    assert (THREADS / "thread-13.13" / "page-0001.html.gz").exists()
+    assert "waiting to be retried" not in result.out
+    forum.hits.clear()
+    assert "waiting to be retried" not in xf("status").out
+    xf("crawl")
+    assert forum.count("/threads/thread-11.11/") == 0
+    xf("crawl", "--retry-failed")                       # unless asked
+    assert forum.count("/threads/thread-11.11/") == 1
+
+
 def test_a_thread_renamed_on_the_site_has_its_folder_renamed(forum, xf):
     xf("crawl", forum.url)
     (THREADS / "thread-10.10" / "page-0006.html.gz").unlink()
