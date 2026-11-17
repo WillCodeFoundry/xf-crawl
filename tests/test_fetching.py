@@ -39,8 +39,38 @@ class BrokenRoute:
     def failed(self, *, auth_problem: bool) -> None:
         raise AssertionError("never reached: nothing was sent")
 
+    def next_server(self) -> str | None:
+        raise AssertionError("never reached: nothing was sent")
+
+    @property
+    def server(self) -> str:
+        return "broken"
+
     def describe(self) -> str:
         return "a broken route"
+
+
+class HoppingRoute:
+    """A route straight to the forum (no proxy in between) that names a new server when asked to."""
+
+    max_failures = 3
+
+    def __init__(self, forum_url: str) -> None:
+        self.server = "s1"
+        self._url = forum_url
+
+    def proxies(self) -> Proxies:
+        return {"http": "", "https": ""}
+
+    def failed(self, *, auth_problem: bool) -> None:
+        pass
+
+    def next_server(self) -> str | None:
+        self.server = f"s{int(self.server[1:]) + 1}"
+        return self.server
+
+    def describe(self) -> str:
+        return self.server
 
 
 class NoBreaks(random.Random):
@@ -95,21 +125,22 @@ def test_a_page_followed_from_another_says_so(forum: MockForum):
     assert followed.headers["Sec-Fetch-Site"] == "same-origin"
 
 
-def test_a_busy_site_is_retried_with_its_retry_after(forum: MockForum):
+def test_a_busy_site_is_asked_once_and_its_retry_after_passed_on(forum: MockForum):
     forum.busy_once.add(11)
     waits = Waits()
     response = fetcher(waits).get(forum.url + "threads/thread-11.11/")
-    assert response.status == 200
-    assert waits.paused == [2.0]                      # the default first wait; Retry-After: 0 is shorter
+    assert (response.status, response.retry_after) == (503, 0.0)
+    assert forum.count("/threads/thread-11.11/") == 1
+    assert waits.paused == []
 
 
-def test_a_page_that_stays_down_fails_after_five_tries(forum: MockForum):
+def test_a_site_that_doesnt_answer_fails_at_once(forum: MockForum):
     forum.stop()
     waits = Waits()
     with pytest.raises(FetchFailed) as raised:
         fetcher(waits).get(forum.url)
     assert raised.value.reason == "network"
-    assert waits.paused == [2.0, 4.0, 8.0, 16.0]
+    assert waits.paused == []
 
 
 def test_a_redirect_reports_where_it_went(forum: MockForum):
@@ -138,3 +169,28 @@ def test_an_unreachable_fixed_proxy_is_proxy_down_not_a_page_failure(forum: Mock
 ])
 def test_only_a_407_status_counts_as_refused_credentials(message, refused):
     assert refused_credentials(requests.exceptions.ProxyError(message)) is refused
+
+
+def test_every_change_of_server_the_site_sees_brings_a_new_visitor(forum: MockForum):
+    visitors: list[str] = []
+
+    def new_visitor() -> str:
+        visitors.append("v")
+        return f"visitor {len(visitors)}"
+
+    route = HoppingRoute(forum.url)
+    polite = PoliteFetcher(requests.Session(), Pacing(0, 0, rng=NoBreaks()), route, new_visitor)
+    seen_from = polite._same_visitor_only_on_the_same_server
+    seen_from(route.server)                       # nothing sent yet: keep the saved visitor
+    polite._server = route.server                 # a request went through s1
+    seen_from(route.server)
+    assert visitors == []
+    route.next_server()
+    seen_from(route.server)                       # s2: the site would see the visitor from elsewhere
+    assert visitors == ["v"]
+    seen_from(route.server)
+    assert visitors == ["v"]
+    route.next_server()
+    route.next_server()
+    seen_from(route.server)
+    assert visitors == ["v", "v"]

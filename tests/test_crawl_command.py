@@ -224,27 +224,52 @@ def test_a_second_run_plans_from_the_link_index(forum, xf):
     assert "links of 0 from the link index, 11 read from the pages" in xf("crawl").err
 
 
-def test_it_stops_with_an_error_when_no_page_comes_through_for_too_long(forum, xf):
-    forum.forbidden = {11}
-    result = xf("crawl", forum.url, "--give-up-after", "0")
-    assert result.code == 1
-    assert "Stopped: no page has come through for 0s, the last answer being http-403" in result.out
-    assert forum.count("/threads/thread-12.12/") == 0                 # nothing fetched after it
-    assert "Run xf crawl again to continue." in result.out
-
-
-def test_a_refusal_now_and_then_does_not_stop_it(forum, xf):
-    forum.forbidden = {11}
+def test_pages_failing_in_a_row_climb_the_ladder_and_a_good_page_resets_it(forum, xf):
+    forum.forbidden = {10, 11, 12}
     result = xf("crawl", forum.url)
     assert result.code == 0, result.out
-    assert forum.count("/threads/thread-12.12/") == 1
+    assert "1 pages failing in a row: pausing 0s\n" in result.err
+    assert "2 pages failing in a row: pausing 0s, no other server; new visitor (" in result.err   # direct
+    assert "3 pages failing in a row: pausing 0s, no other server; new visitor (" in result.err
+    assert "4 pages failing in a row" not in result.err
+    assert forum.count("/threads/thread-13.13/") == 1
+
+
+def test_a_page_that_comes_through_starts_the_ladder_again(forum, xf):
+    forum.forbidden = {10, 11, 13, 14}                                # thread 12 comes through between
+    result = xf("crawl", forum.url)
+    assert result.err.count("1 pages failing in a row") == 2
+    assert "3 pages failing in a row" not in result.err
+
+
+def test_a_new_visitor_drops_the_sites_cookies(forum, xf):
+    forum.forbidden = {10, 11, 12}
+    xf("crawl", forum.url)
+    def cookies_on(path):
+        return [hit.headers.get("Cookie", "") for hit in forum.hits if hit.path == path]
+    assert cookies_on("/threads/thread-11.11/") == ["xf_session=s1"]          # before the second failure
+    assert cookies_on("/threads/thread-12.12/") == [""]                       # after: a new visitor
+
+
+def test_a_refused_page_is_retried_within_the_hour(forum, xf):
+    forum.forbidden = {11}
+    result = xf("crawl", forum.url)
+    assert reasons(THREADS / "thread-11.11" / "page-0001.failed.jsonl") == ["refused"]
+    assert "turned away for now; not stored; attempt 1, next try after" in result.err
 
 
 def test_deleted_threads_show_the_site_is_still_answering(forum, xf):
-    forum.gone = {11, 12}
-    result = xf("crawl", forum.url, "--give-up-after", "0")
+    forum.gone = {10, 11, 12, 13}
+    result = xf("crawl", forum.url)
     assert result.code == 0, result.out
-    assert forum.count("/threads/thread-13.13/") == 1
+    assert "failing in a row" not in result.err
+
+
+def test_a_private_thread_is_gone_for_good_and_not_trouble(forum, xf):
+    forum.private = {10, 11, 12}
+    result = xf("crawl", forum.url)
+    assert reasons(THREADS / "thread-11.11" / "page-0001.failed.jsonl") == ["http-403"]
+    assert "failing in a row" not in result.err
 
 
 def test_a_sites_script_check_is_answered_as_a_browser_would(forum, xf):

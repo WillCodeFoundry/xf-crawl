@@ -5,7 +5,8 @@ A page's failures are kept as JSON lines, one per attempt, appended in order:
     {"time": "2026-11-09T16:16:05+00:00", "reason": "http-503", "url": "http://x/threads/a.12/"}
     {"time": "...", "reason": "redirect", "url": "http://x/threads/a.12/page-3", "detail": "http://x/threads/a.12/page-2"}
 
-Reasons: ``http-<status>``, ``timeout``, ``network``, ``error-page``, ``redirect``, ``robots``.
+Reasons: ``http-<status>``, ``refused`` (a 403 from in front of the forum), ``timeout``, ``network``,
+``error-page``, ``redirect``, ``robots``.
 
 A redirect to another thread or forum (``detail``) means the page's thread was merged into it, or moved: that
 is final, and the page is never tried again unless asked (``--retry-failed``). A redirect within the same
@@ -79,10 +80,10 @@ class RetryPolicy:
     good, so a page that keeps failing is tried less and less often, and never given up on.
     """
 
-    temporary: timedelta = timedelta(hours=1)
+    temporary: timedelta = timedelta(minutes=15)
     permanent: timedelta = timedelta(days=1)
     longest: timedelta = timedelta(days=30)
-    _MAX_DOUBLINGS = 20  # 2**20 * 1 hour is past any sensible `longest`; more would overflow timedelta
+    _MAX_DOUBLINGS = 20  # 2**20 * 15 minutes is past any sensible `longest`; more would overflow timedelta
 
     def wait_after(self, failures: list[Failure]) -> timedelta:
         last = failures[-1]

@@ -36,12 +36,14 @@ def tunnelbear(tmp_path: Path, environment: ProcessEnvironment) -> Iterator[Mock
 
 @pytest.fixture
 def xf(capsys: pytest.CaptureFixture[str]) -> Callable[..., CliResult]:
-    """The real xf command, in-process: ``xf("crawl", url)``. Crawls don't wait between requests unless
-    the test passes --delay itself."""
+    """The real xf command, in-process: ``xf("crawl", url)``. Crawls don't wait between requests, or pause
+    when pages keep failing, unless the test passes --delay or --longest-pause itself."""
 
     def run(*argv: str) -> CliResult:
         if argv[0] == "crawl" and "--delay" not in argv:
             argv = (*argv, "--delay", "0", "--jitter", "0")
+        if argv[0] == "crawl" and "--longest-pause" not in argv:
+            argv = (*argv, "--longest-pause", "0")
         code = cli.main(list(argv))
         captured = capsys.readouterr()
         return CliResult(code, captured.out, captured.err)

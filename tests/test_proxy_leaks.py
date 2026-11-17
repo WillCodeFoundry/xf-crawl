@@ -11,8 +11,10 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import requests
+
 from tests.support.mock_tunnelbear import EMAIL, PASSWORD
-from xfcrawl.crawler import Crawl, connect
+from xfcrawl.crawler import Crawl, Remedies, connect
 from xfcrawl.failures import Backoff, RetryPolicy
 from xfcrawl.fetching import Pacing, PoliteFetcher
 from xfcrawl.layout import StoreLayout
@@ -20,6 +22,7 @@ from xfcrawl.link_index import LinkIndex
 from xfcrawl.plan import CrawlPlan
 from xfcrawl.proxy import proxied_session
 from xfcrawl.store import PageStore
+from xfcrawl.trouble import Step, Trouble
 from xfcrawl.tunnelbear.account import Credentials, Endpoints, TokenFile, TunnelBearAccount
 from xfcrawl.tunnelbear.rotation import ServerRotation, Turns
 
@@ -41,6 +44,7 @@ def test_a_crawl_through_tunnelbear(forum, tunnelbear, xf):
     assert tunnelbear.rejected >= 1                  # the stale token was refused, then renewed
     assert json.loads((STORE / "config.json").read_text())["proxy"] == {"type": "tunnelbear"}
     assert (STORE / "tunnelbear.json").stat().st_mode & 0o077 == 0   # the login is readable by its owner only
+    assert "new visitor" not in result.err           # a server failing before the site saw it doesn't count
 
 
 def test_a_country_saved_by_an_earlier_version_is_ignored(forum, tunnelbear, xf):
@@ -119,6 +123,44 @@ def test_a_token_renewal_failing_mid_crawl_stops_it(forum, tunnelbear):
     assert "could not renew the TunnelBear token" in summary.stopped
     assert summary.saved > 0                          # it was working before the API died
     assert forum.direct_hits() == []
+
+
+def test_pages_failing_in_a_row_move_to_another_tunnelbear_server(forum, tunnelbear, xf):
+    forum.forbidden = {10, 11}
+    result = xf("crawl", forum.url, "--tunnelbear")
+    assert result.code == 0, result.out
+    assert "2 pages failing in a row: pausing 0s, new server " in result.err
+    assert ", with a new visitor" in result.err
+    assert "new visitor (" in result.err.split("2 pages failing in a row")[1]
+    thread_12 = [hit for hit in forum.hits if hit.path == "/threads/thread-12.12/"]
+    assert "xf_session" not in thread_12[0].headers.get("Cookie", "")     # the cookies stayed behind
+    assert forum.direct_hits() == []
+
+
+def test_a_crawl_that_stays_in_trouble_stops_with_an_error(forum):
+    forum.forbidden = set(range(100))
+    layout = StoreLayout.in_directory(Path.cwd())
+    store = PageStore.open(layout)
+    plan = CrawlPlan(forum.url, store, LinkIndex(layout.link_index), Backoff(RetryPolicy(), datetime.now(timezone.utc)))
+    plan.rebuild()
+    fetcher = PoliteFetcher(requests.Session(), Pacing(0, 0), None)
+    changes: list[str] = []
+
+    def change(what: str) -> str:
+        changes.append(what)
+        return f"another {what}"
+
+    remedies = Remedies(new_server=lambda: change("server"), new_visitor=lambda: change("visitor"))
+    short = Trouble(0, ladder=(Step(5, new_server=False), Step(5, new_server=True)), top_step_tries=2)
+    paused: list[float] = []
+    summary = Crawl(plan, store, lambda: connect(fetcher, forum.url, obey_robots=False, remedies=remedies),
+                    lambda: datetime.now(timezone.utc), time.monotonic, short, paused.append).run(max_fetches=None)
+    assert summary.failed
+    assert summary.stopped is not None and "4 pages in a row" in summary.stopped
+    assert "2 new servers and visitors; the answers: refused x4" in summary.stopped
+    assert paused == [0, 0, 0]                         # the longest pause, 0, caps the steps' 5s
+    assert changes == ["server", "server"]             # the top step, tried twice; each server its visitor
+    assert summary.saved == 4                          # the index and the forum lists came through
 
 
 def test_proxy_variables_in_the_environment_cant_route_around_it(forum, tunnelbear, xf, environment):

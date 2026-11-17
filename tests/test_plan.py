@@ -58,10 +58,10 @@ def test_a_failed_page_waits_out_its_back_off():
     store = new_store()
     store.save(INDEX_PAGE, page("/threads/t.10/"), None)
     store.record_failure(THREAD.page(1), Failure(NOW, "http-503"), None)
-    waiting = plan_for(store, NOW + timedelta(minutes=30))
+    waiting = plan_for(store, NOW + timedelta(minutes=10))
     assert list(waiting.to_fetch()) == []
-    assert waiting.waiting() == {THREAD.page(1): NOW + timedelta(hours=1)}
-    assert [ref.key for ref in plan_for(store, NOW + timedelta(hours=1, seconds=1)).to_fetch()] == ["thread:10:1"]
+    assert waiting.waiting() == {THREAD.page(1): NOW + timedelta(minutes=15)}
+    assert [ref.key for ref in plan_for(store, NOW + timedelta(minutes=15, seconds=1)).to_fetch()] == ["thread:10:1"]
     assert [ref.key for ref in plan_for(store, NOW, ignore_backoff=True).to_fetch()] == ["thread:10:1"]
 
 
@@ -126,3 +126,18 @@ def test_pages_left_are_counted_by_stage():
     assert [plan.to_fetch_in(stage) for stage in Stage] == [0, 1, 2, 2]
     plan.next_page()
     assert plan.to_fetch_in(Stage.THREAD_LISTS) == 0
+
+
+def test_a_page_that_failed_in_this_run_comes_back_once_its_wait_is_over():
+    store = new_store()
+    store.save(INDEX_PAGE, page("/threads/t.10/", "/threads/u.11/"), None)
+    plan = plan_for(store)
+    first = plan.next_page(NOW)
+    assert first is not None and first.key == "thread:10:1"
+    plan.retry_later(first, NOW + timedelta(minutes=15))
+    assert plan.waiting() == {first: NOW + timedelta(minutes=15)}
+    second = plan.next_page(NOW + timedelta(minutes=1))                      # not yet: the next one
+    assert second is not None and second.key == "thread:11:1"
+    assert plan.next_page(NOW + timedelta(minutes=2)) is None
+    assert plan.next_page(NOW + timedelta(minutes=15)) == first                # its turn again
+    assert plan.waiting() == {}
