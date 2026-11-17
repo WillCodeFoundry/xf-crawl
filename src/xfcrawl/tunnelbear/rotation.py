@@ -1,20 +1,33 @@
 """ServerRotation: a TunnelBear account as the crawler's proxy route.
 
-It keeps one of the country's proxy servers in use, renews the VPN token every ``renew_every`` seconds,
-and moves to the next server when told the current one failed. Anything that goes wrong getting a token or
-the server list becomes ProxyDown, so the crawl stops rather than going direct.
+It uses every proxy server TunnelBear has, in every country, in a shuffled order: one server for
+``REQUESTS_PER_SERVER`` requests, then the next, and the next at once when one fails. The VPN token is
+renewed every ``renew_every`` seconds and the server list every ``relist_every``. Anything that goes wrong
+getting a token or the server list becomes ProxyDown, so the crawl stops rather than going direct.
 """
 
+import logging
+import random
 import time
 import urllib.parse
 from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Protocol
 
 import requests
 
 from xfcrawl.proxy import Proxies, ProxyDown, refused_credentials
-from xfcrawl.tunnelbear.account import TunnelBearAccount, TunnelBearError
+from xfcrawl.tunnelbear.account import Endpoints, Server, TunnelBearError
+
+REQUESTS_PER_SERVER = 8000
+"""How many requests go through one server before moving on to the next. Change it here."""
 
 _RENEW_EVERY_SECONDS = 300.0
+_RELIST_EVERY_SECONDS = 6 * 3600.0
+"""Listing every server takes a request per country, so it is done now and then, not with each token."""
+_MOST_SERVERS_TRIED = 10
+"""How many servers a request tries before the route is taken to be down."""
+_LOGGER = logging.getLogger(__name__)
 
 
 def proxy_url(host: str, token: str, port: int) -> str:
@@ -22,41 +35,82 @@ def proxy_url(host: str, token: str, port: int) -> str:
     return f"https://{quoted}:{quoted}@{host}:{port}"
 
 
+class ServerSource(Protocol):
+    """What the rotation needs of a TunnelBear account."""
+
+    @property
+    def endpoints(self) -> Endpoints: ...
+
+    def vpn_token(self) -> str: ...
+
+    def all_servers(self) -> list[Server]: ...
+
+
+@dataclass(frozen=True)
+class Turns:
+    """How long a server, a token and a server list each last."""
+
+    requests_per_server: int = REQUESTS_PER_SERVER
+    renew_every: float = _RENEW_EVERY_SECONDS
+    """Seconds."""
+    relist_every: float = _RELIST_EVERY_SECONDS
+    """Seconds."""
+
+
+_DEFAULT_TURNS = Turns()
+
+
 class ServerRotation:
     def __init__(
         self,
-        account: TunnelBearAccount,
-        country: str | None,
+        account: ServerSource,
+        turns: Turns = _DEFAULT_TURNS,
         *,
-        renew_every: float = _RENEW_EVERY_SECONDS,
         clock: Callable[[], float] = time.monotonic,
+        rng: random.Random | None = None,
     ) -> None:
         """Gets a token and the server list now; raises ProxyDown if it can't."""
         self._account = account
-        self._country = country
-        self._renew_every = renew_every
+        self._turns = turns
         self._clock = clock
-        self.hosts: list[str] = []
+        self._rng = rng or random.Random()
+        self.servers: list[Server] = []
         self.token = ""
         self._index = 0
-        self._renewed_at = 0.0
+        self._sent = 0
+        self._renewed_at = self._listed_at = 0.0
         self.renew()
+        self.relist()
 
     def renew(self) -> None:
-        """A fresh token and server list, staying on the current server if it is still listed. Raises
-        ProxyDown when TunnelBear can't give them."""
-        current = self.host if self.hosts else None
+        """A fresh VPN token. Raises ProxyDown when TunnelBear can't give one."""
         try:
             self.token = self._account.vpn_token()
-            self.hosts = self._account.servers(self._country)
         except (TunnelBearError, requests.RequestException) as error:
             raise ProxyDown(f"could not renew the TunnelBear token: {error}") from error
-        self._index = self.hosts.index(current) if current in self.hosts else 0
         self._renewed_at = self._clock()
+
+    def relist(self) -> None:
+        """Every server TunnelBear has, shuffled, staying on the current one if it is still listed. Raises
+        ProxyDown when TunnelBear can't list them."""
+        current = self.host if self.servers else None
+        try:
+            servers = self._account.all_servers()
+        except (TunnelBearError, requests.RequestException) as error:
+            raise ProxyDown(f"could not list the TunnelBear servers: {error}") from error
+        self._rng.shuffle(servers)
+        self.servers = servers
+        hosts = [server.host for server in servers]
+        self._index = hosts.index(current) if current in hosts else 0
+        self._listed_at = self._clock()
+
+    @property
+    def hosts(self) -> list[str]:
+        return [server.host for server in self.servers]
 
     @property
     def host(self) -> str:
-        return self.hosts[self._index]
+        return self.servers[self._index].host
 
     @property
     def port(self) -> int:
@@ -65,22 +119,43 @@ class ServerRotation:
     # -- ProxyRoute ---------------------------------------------------------------------------------
     @property
     def max_failures(self) -> int:
-        return 2 * len(self.hosts) + 1  # each server may fail once for a stale token, once for real
+        # each server tried may fail once for a stale token, once for real
+        return 2 * min(len(self.servers), _MOST_SERVERS_TRIED) + 1
+
+    def take_turn(self) -> None:
+        """Count one more request through the current server, renewing the token or the server list when
+        due, and moving to the next server once this one has had its share. Raises ProxyDown."""
+        if self._clock() - self._renewed_at > self._turns.renew_every:
+            self.renew()
+        if self._clock() - self._listed_at > self._turns.relist_every:
+            self.relist()
+        if self._sent >= self._turns.requests_per_server:
+            self._move_on()
+            _LOGGER.info("After %s requests, moving to TunnelBear server %s", f"{self._turns.requests_per_server:,}",
+                         self._where())
+        self._sent += 1
 
     def proxies(self) -> Proxies:
-        if self._clock() - self._renewed_at > self._renew_every:
-            self.renew()
+        self.take_turn()
         url = proxy_url(self.host, self.token, self.port)
         return {"http": url, "https": url}
 
     def failed(self, *, auth_problem: bool) -> None:
         if auth_problem:
             self.renew()
-        self._index = (self._index + 1) % len(self.hosts)
+        self._move_on()
 
     def describe(self) -> str:
-        where = self._country.upper() if self._country else "closest region"
-        return f"TunnelBear {where}, {len(self.hosts)} servers, using {self.host}"
+        countries = len({server.country for server in self.servers})
+        return f"TunnelBear, {len(self.servers)} servers in {countries} countries, using {self._where()}"
+
+    def _move_on(self) -> None:
+        self._index = (self._index + 1) % len(self.servers)
+        self._sent = 0
+
+    def _where(self) -> str:
+        server = self.servers[self._index]
+        return f"{server.host} ({server.country})"
 
 
 def fetch_through(rotation: ServerRotation, session: requests.Session, url: str) -> requests.Response:

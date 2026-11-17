@@ -1,4 +1,4 @@
-"""xf tunnelbear: log in to TunnelBear, list its countries, fetch a URL or run a local proxy through it."""
+"""xf tunnelbear: log in to TunnelBear, fetch a URL or run a local proxy through it."""
 
 import argparse
 import asyncio
@@ -10,7 +10,7 @@ import sys
 from collections.abc import Callable, Mapping
 from datetime import date
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import BinaryIO
 
 import requests
 
@@ -35,14 +35,11 @@ def add_parser(subparsers: "argparse._SubParsersAction[argparse.ArgumentParser]"
     actions = parser.add_subparsers(dest="action", required=True)
     actions.add_parser("login", help="log in, and save the login here").set_defaults(func=login_main)
     actions.add_parser("logout", help="forget the login saved here").set_defaults(func=logout_main)
-    actions.add_parser("countries", help="the countries TunnelBear offers").set_defaults(func=countries_main)
     fetch = actions.add_parser("fetch", help="fetch one URL through TunnelBear, e.g. to check your IP")
     fetch.add_argument("url")
-    fetch.add_argument("-c", "--country", help="ISO code, e.g. FR (default: the closest region)")
     fetch.add_argument("-o", "--output", type=Path, help="write the body to this file")
     fetch.set_defaults(func=fetch_main)
     serve = actions.add_parser("serve", help="a local HTTP proxy that relays through TunnelBear")
-    serve.add_argument("-c", "--country", help="ISO code, e.g. FR (default: the closest region)")
     serve.add_argument("-p", "--port", type=int, default=8118)
     serve.set_defaults(func=serve_main)
 
@@ -65,14 +62,8 @@ def logout_main(_args: argparse.Namespace) -> int:
     return 0
 
 
-def countries_main(_args: argparse.Namespace) -> int:
-    account = logged_in_account(StoreLayout.in_directory(Path.cwd()), os.environ)
-    print("\n".join(country_lines(account.countries())))
-    return 0
-
-
 def fetch_main(args: argparse.Namespace) -> int:
-    rotation = ServerRotation(logged_in_account(StoreLayout.in_directory(Path.cwd()), os.environ), args.country)
+    rotation = ServerRotation(logged_in_account(StoreLayout.in_directory(Path.cwd()), os.environ))
     session = proxied_session(os.environ.get("REQUESTS_CA_BUNDLE"))
     session.headers.update(Browser.pick(random.Random(), date.today()).headers)
     response = fetch_through(rotation, session, args.url)
@@ -82,7 +73,7 @@ def fetch_main(args: argparse.Namespace) -> int:
 
 
 def serve_main(args: argparse.Namespace) -> int:
-    rotation = ServerRotation(logged_in_account(StoreLayout.in_directory(Path.cwd()), os.environ), args.country)
+    rotation = ServerRotation(logged_in_account(StoreLayout.in_directory(Path.cwd()), os.environ))
     upstream_ssl = ssl.create_default_context(cafile=os.environ.get("REQUESTS_CA_BUNDLE"))
     asyncio.run(LocalProxy(rotation, args.port, upstream_ssl).serve())
     return 0
@@ -131,10 +122,6 @@ def ask_for_credentials(
                       f"{accounts.path}")
 
     return credentials
-
-
-def country_lines(countries: list[dict[str, Any]]) -> list[str]:
-    return [f"{c.get('iso', '?'):4} {c.get('name', '')}" for c in sorted(countries, key=lambda c: c.get("name", ""))]
 
 
 def write_body(body: bytes, output: Path | None, stdout: BinaryIO) -> None:

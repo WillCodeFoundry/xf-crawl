@@ -32,7 +32,6 @@ from xfcrawl.tunnelbear.rotation import ServerRotation
 from xfcrawl.visitor import Visitor, VisitorFile
 
 _LOGGER = logging.getLogger(__name__)
-_AUTO_COUNTRY = "auto"
 
 
 def add_parser(subparsers: "argparse._SubParsersAction[argparse.ArgumentParser]") -> None:
@@ -61,8 +60,8 @@ def add_parser(subparsers: "argparse._SubParsersAction[argparse.ArgumentParser]"
     parser.add_argument("--new-browser", action="store_true",
                         help="pass for a new browser, without the site's cookies, from now on")
     route = parser.add_mutually_exclusive_group()
-    route.add_argument("--tunnelbear", nargs="?", const=_AUTO_COUNTRY, metavar="COUNTRY",
-                       help="go through TunnelBear, in COUNTRY (e.g. FR) or the closest region; remembered")
+    route.add_argument("--tunnelbear", action="store_true",
+                       help="go through TunnelBear, moving from server to server in every country; remembered")
     route.add_argument("--proxy", metavar="URL", help="go through this HTTP(S) proxy; remembered")
     route.add_argument("--direct", action="store_true", help="stop going through a remembered proxy")
     forums = parser.add_mutually_exclusive_group()
@@ -112,8 +111,8 @@ class ProxyChange:
 
 def requested_proxy_change(args: argparse.Namespace) -> ProxyChange | None:
     """The change of proxy the arguments ask for, or None when they don't mention one."""
-    if args.tunnelbear is not None:
-        return ProxyChange(TunnelBearProxy(None if args.tunnelbear == _AUTO_COUNTRY else args.tunnelbear))
+    if args.tunnelbear:
+        return ProxyChange(TunnelBearProxy())
     if args.proxy is not None:
         return ProxyChange(UrlProxy(args.proxy))
     return ProxyChange(None) if args.direct else None
@@ -207,7 +206,7 @@ def proxy_route(
     account = open_account(layout, environment)
     if not account.is_logged_in():
         account.login(credentials(), mfa_code=None)
-    return ServerRotation(account, proxy.country)
+    return ServerRotation(account)
 
 
 def report(summary: CrawlSummary) -> list[str]:

@@ -4,11 +4,12 @@
   The first /user call hands out a stale token ("tok1") that the proxy
   rejects with 407; later calls hand out "tok2". So every test also
   exercises the token refresh.
-* The server list is ["127.0.0.1", "localhost"]. Both reach the fake proxy,
-  but its certificate is only valid for "localhost", so the first one always
-  fails certificate checking: every test also exercises switching servers,
-  and the proxy's hostname being verified. (No DNS involved, so it behaves
-  the same on every machine.)
+* Two countries list the servers "127.0.0.1" and "localhost" (DE lists
+  "localhost" again). Both reach the fake proxy, but its certificate is only
+  valid for "localhost", so "127.0.0.1" always fails certificate checking: a
+  test whose shuffled order starts there exercises switching servers, and
+  every request the proxy's hostname being verified. (No DNS involved, so it
+  behaves the same on every machine.)
 * Proxy (TLS, certificate from a throwaway CA made with trustme): accepts
   Proxy-Authorization "tok2:tok2", forwards plain-HTTP requests and marks
   them with an X-Test-Proxy: 1 header so the forum can tell proxied
@@ -81,9 +82,11 @@ class MockTunnelBear:
                 return 500, {"message": "down"}, {}
             return 200, {"vpn_token": "tok1" if self.user_calls == 1 else "tok2"}, {}
         if path == "/countries":
-            return 200, [{"iso": "FR", "name": "France"}], {}
-        if path in ("/vpns", "/vpns/countries/FR"):
+            return 200, [{"iso": "FR", "name": "France"}, {"iso": "DE", "name": "Germany"}], {}
+        if path == "/vpns/countries/FR":
             return 200, {"vpns": [{"url": "127.0.0.1"}, {"url": "localhost"}]}, {}
+        if path == "/vpns/countries/DE":
+            return 200, {"vpns": [{"url": "localhost"}]}, {}  # listed in two countries: counted once
         return 404, {"message": "not found"}, {}
 
     def _start_api(self) -> None:
