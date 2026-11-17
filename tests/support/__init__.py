@@ -10,7 +10,7 @@ import pytest
 # Variables that would route requests elsewhere, or point at a real TunnelBear login.
 OUTSIDE_VARIABLES = (
     "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy",
-    "REQUESTS_CA_BUNDLE", "TB_STATE", "TB_USER", "TB_PASS",
+    "REQUESTS_CA_BUNDLE", "TB_STATE",
     "TB_DASHBOARD_URL", "TB_API_URL", "TB_PB_API_URL", "TB_PROXY_PORT",
 )
 

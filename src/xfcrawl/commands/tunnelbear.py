@@ -18,7 +18,7 @@ from xfcrawl.browser import Browser
 from xfcrawl.errors import XfError
 from xfcrawl.layout import StoreLayout
 from xfcrawl.proxy import proxied_session
-from xfcrawl.tunnelbear.account import Credentials, Endpoints, TokenFile, TunnelBearAccount
+from xfcrawl.tunnelbear.account import Credentials, CredentialsFile, Endpoints, TokenFile, TunnelBearAccount
 from xfcrawl.tunnelbear.local_proxy import LocalProxy
 from xfcrawl.tunnelbear.rotation import ServerRotation, fetch_through
 
@@ -51,7 +51,10 @@ def add_parser(subparsers: "argparse._SubParsersAction[argparse.ArgumentParser]"
 def login_main(_args: argparse.Namespace) -> int:
     account = open_account(StoreLayout.in_directory(Path.cwd()), os.environ)
     account.logout()
-    account.login(ask_for_credentials(os.environ, interactive=True)(), mfa_code=_ask_mfa_code)
+    layout = StoreLayout.in_directory(Path.cwd())
+    # typed in a terminal, so a particular account can be chosen; else from the credentials file
+    account.login(ask_for_credentials(layout, interactive=sys.stdin.isatty(), typed_first=True)(),
+                  mfa_code=_ask_mfa_code)
     print(f"Logged in. Saved to {token_path(StoreLayout.in_directory(Path.cwd()), os.environ)}")
     return 0
 
@@ -93,27 +96,39 @@ def token_path(layout: StoreLayout, environment: Mapping[str, str]) -> Path:
 def open_account(layout: StoreLayout, environment: Mapping[str, str]) -> TunnelBearAccount:
     """The account whose login is saved here; its API is reached directly, not through any proxy."""
     return TunnelBearAccount(
-        Endpoints.from_environment(environment), TokenFile(token_path(layout, environment)), requests.Session()
+        Endpoints.from_environment(environment), TokenFile(token_path(layout, environment)), requests.Session(),
+        relogin=CredentialsFile(layout.tunnelbear_credentials).pick,
     )
 
 
 def logged_in_account(layout: StoreLayout, environment: Mapping[str, str]) -> TunnelBearAccount:
     account = open_account(layout, environment)
     if not account.is_logged_in():
-        account.login(ask_for_credentials(environment, interactive=sys.stdin.isatty())(), mfa_code=_ask_mfa_code)
+        account.login(ask_for_credentials(layout, interactive=sys.stdin.isatty())(), mfa_code=_ask_mfa_code)
     return account
 
 
-def ask_for_credentials(environment: Mapping[str, str], *, interactive: bool) -> Callable[[], Credentials]:
-    """How to get the TunnelBear email and password when no login is saved: TB_USER and TB_PASS, else, in a
-    terminal, ask. Asked only when needed, so a saved login never prompts."""
+def ask_for_credentials(
+    layout: StoreLayout, *, interactive: bool, typed_first: bool = False
+) -> Callable[[], Credentials]:
+    """How to get a TunnelBear email and password when no login is saved: an account picked at random from
+    tunnelbear-credentials.json, else, in a terminal, typed; with ``typed_first``, typed if there is a
+    terminal. Asked only when needed, so a saved login never prompts."""
+    accounts = CredentialsFile(layout.tunnelbear_credentials)
+
+    def typed() -> Credentials | None:
+        if not interactive:
+            return None
+        return Credentials(input("TunnelBear email: "), getpass.getpass("TunnelBear password: "))
 
     def credentials() -> Credentials:
-        email = environment.get("TB_USER") or (input("TunnelBear email: ") if interactive else "")
-        password = environment.get("TB_PASS") or (getpass.getpass("TunnelBear password: ") if interactive else "")
-        if not email or not password:
-            raise XfError("not logged in to TunnelBear: run `xf tunnelbear login`, or set TB_USER and TB_PASS")
-        return Credentials(email, password)
+        sources = (typed, accounts.pick) if typed_first else (accounts.pick, typed)
+        for source in sources:
+            found = source()
+            if found is not None and found.email and found.password:
+                return found
+        raise XfError(f"not logged in to TunnelBear: run `uv run xf tunnelbear login`, or list accounts in "
+                      f"{accounts.path}")
 
     return credentials
 

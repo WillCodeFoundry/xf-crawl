@@ -29,6 +29,8 @@ import trustme
 
 from tests.support import ProcessEnvironment
 
+EMAIL, PASSWORD = "me@example.com", "not-a-real-password"
+CREDENTIALS_FILE = Path(".crawl-store/tunnelbear-credentials.json")
 GOOD_AUTH = "Basic " + base64.b64encode(b"tok2:tok2").decode()
 ApiReply = tuple[int, Any, dict[str, str]]
 
@@ -39,6 +41,9 @@ class MockTunnelBear:
         self.user_calls_allowed: int | None = None  # after this many /user calls the API answers 500
         self.mfa = False                            # the account asks for an MFA code at login
         self.mfa_codes: list[str] = []              # the codes it was sent
+        self.logins: list[str] = []                 # emails logged in with; the nth hands out a<n> and r<n>
+        self.expired_access: set[str] = set()       # access tokens PolarBear's /auth refuses
+        self.refused_refresh: set[str] = set()      # refresh tokens the dashboard refuses
         self.forwarded: list[str] = []              # URLs the proxy forwarded
         self.rejected = 0             # 407s
         self.ca = trustme.CA()
@@ -48,15 +53,26 @@ class MockTunnelBear:
     # ---------------------------------------------------------------- API
     def api_post(self, path: str, body: dict[str, Any]) -> ApiReply:
         if path.endswith("/v2/token"):
-            if self.mfa and body.get("grant_type") == "password":
-                return 200, {"mfa_type": "totp", "login_token": "lt1"}, {}
-            return 200, {"access_token": "a1", "refresh_token": "r1"}, {}
+            return self._token(body)
         if path == "/v2/mfa":
             self.mfa_codes.append(body["mfa_token"])
             return 200, {"access_token": "a1", "refresh_token": "r1"}, {}
         if path == "/auth":
+            if body.get("token") in self.expired_access:
+                return 401, {"message": "token expired"}, {}
             return 200, {}, {"Authorization": "Bearer pb1"}
         return 404, {"message": "not found"}, {}
+
+    def _token(self, body: dict[str, Any]) -> ApiReply:
+        if body.get("grant_type") == "refresh_token":
+            if body.get("refresh_token") in self.refused_refresh:
+                return 401, {"message": "invalid refresh token"}, {}
+            return 200, {"access_token": "a1", "refresh_token": "r1"}, {}
+        if self.mfa:
+            return 200, {"mfa_type": "totp", "login_token": "lt1"}, {}
+        self.logins.append(body["username"])
+        n = len(self.logins)
+        return 200, {"access_token": f"a{n}", "refresh_token": f"r{n}"}, {}
 
     def api_get(self, path: str) -> ApiReply:
         if path == "/user":
@@ -147,11 +163,17 @@ class MockTunnelBear:
         environment.set_env("TB_PB_API_URL", self.api_url)
         environment.set_env("TB_PROXY_PORT", str(self.proxy_port))
         environment.set_env("REQUESTS_CA_BUNDLE", str(self.ca_file))
-        environment.set_env("TB_USER", "me@example.com")
-        environment.set_env("TB_PASS", "not-a-real-password")
+        write_credentials([(EMAIL, PASSWORD)])
         return self
 
     def stop(self) -> None:
         for s in (self.api, self.proxy):
             s.shutdown()
             s.server_close()
+
+
+def write_credentials(accounts: list[tuple[str, str]]) -> None:
+    """The credentials file in the current directory, readable by its owner only, as xf asks."""
+    CREDENTIALS_FILE.parent.mkdir(exist_ok=True)
+    CREDENTIALS_FILE.write_text(json.dumps([{"email": e, "password": p} for e, p in accounts]))
+    CREDENTIALS_FILE.chmod(0o600)
