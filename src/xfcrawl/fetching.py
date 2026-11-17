@@ -1,9 +1,10 @@
 """Fetching pages politely: the only module that sends the crawler's requests.
 
-``PoliteFetcher`` waits between requests, retries what may pass (429 and 5xx, timeouts, dropped
-connections), and goes through a proxy when given one. With a proxy, it fails closed: a proxy failure moves
-to the proxy's next server and is never blamed on the page, and when the proxy can't be used at all it
-raises ProxyDown. Nothing is ever sent without the proxy.
+``PoliteFetcher`` waits between requests and goes through a proxy when given one. It asks for a page once:
+whatever the site answers is returned, and what to do about a failure is the crawl's to decide (trouble.py).
+Two things are asked again at once, as neither is the page's doing: a proxy failure, on the proxy's next
+server, and a site's cookie check (cookie_check.py). With a proxy, it fails closed: when the proxy can't be
+used at all it raises ProxyDown. Nothing is ever sent without the proxy.
 """
 
 import logging
@@ -21,10 +22,7 @@ from xfcrawl.proxy import ProxyDown, ProxyRoute, refused_credentials
 
 DEFAULT_DELAY = 1.0
 DEFAULT_JITTER = 0.5
-_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
-_TRIES = 5
 _TIMEOUT_SECONDS = 30
-_LONGEST_RETRY_WAIT = 300.0
 BREAK_CHANCE = 0.01
 """How often a gap between requests is a break, as when someone stops to read."""
 BREAK_LENGTH = (5.0, 20.0)
@@ -39,10 +37,12 @@ class Response:
     url: str
     """The URL that answered, after redirects."""
     text: str
+    retry_after: float | None = None
+    """Seconds the site asked to wait before asking again (Retry-After), if it did."""
 
 
 class FetchFailed(Exception):
-    """The page could not be fetched; ``reason`` is ``http-<status>``, ``timeout`` or ``network``."""
+    """No answer came: ``reason`` is ``timeout`` or ``network``."""
 
     def __init__(self, reason: str, detail: str = "") -> None:
         super().__init__(f"{reason} {detail}".strip())
@@ -111,10 +111,8 @@ class PoliteFetcher:
 
     def _get(self, url: str, referer: str | None) -> Response:
         headers = followed_from(referer)
-        retry_wait = max(self.pacing.delay, 1.0) * 2
-        tries = proxy_failures = 0
+        proxy_failures = 0
         while True:
-            tries += 1
             self.pacing.wait_turn()
             route = self._route
             proxies = None if route is None else _checked(route.proxies())
@@ -126,29 +124,17 @@ class PoliteFetcher:
                     raise FetchFailed("network", str(error)) from error
                 proxy_failures += 1
                 _switch(route, error, proxy_failures, auth_problem=refused_credentials(error))
-                tries -= 1  # not the page's fault
-                continue
+                continue  # not the page's fault
             except requests.RequestException as error:
                 self.pacing.request_done()
-                failure = FetchFailed("timeout" if isinstance(error, requests.Timeout) else "network", str(error))
-            else:
-                self.pacing.request_done()
-                if response.status_code == 407 and route is not None:
-                    proxy_failures += 1
-                    _switch(route, "407 Proxy Authentication Required", proxy_failures, auth_problem=True)
-                    tries -= 1
-                    continue
-                if response.status_code not in _RETRY_STATUSES:
-                    return Response(response.status_code, response.url, response.text)
-                failure = FetchFailed(f"http-{response.status_code}")
-                retry_after = response.headers.get("Retry-After", "")
-                if retry_after.isdigit():
-                    retry_wait = max(retry_wait, float(retry_after))
-            if tries == _TRIES:
-                raise failure
-            _LOGGER.info("    ! %s; retry %d/%d in %.0fs", failure, tries, _TRIES - 1, retry_wait)
-            self.pacing.pause(retry_wait)
-            retry_wait = min(retry_wait * 2, _LONGEST_RETRY_WAIT)
+                reason = "timeout" if isinstance(error, requests.Timeout) else "network"
+                raise FetchFailed(reason, str(error)) from error
+            self.pacing.request_done()
+            if response.status_code == 407 and route is not None:
+                proxy_failures += 1
+                _switch(route, "407 Proxy Authentication Required", proxy_failures, auth_problem=True)
+                continue
+            return Response(response.status_code, response.url, response.text, _retry_after(response))
 
     def _set_asked_cookie(self, response: Response) -> bool:
         """Whether ``response`` is a page checking for a browser by asking for a cookie; if so, the cookie
@@ -159,6 +145,11 @@ class PoliteFetcher:
         self._session.cookies.set(cookie.name, cookie.value, domain=cookie.domain, path=cookie.path)
         _LOGGER.info("    the site asked for cookie %s (HTTP %d); set it, asking again", cookie.name, response.status)
         return True
+
+
+def _retry_after(response: requests.Response) -> float | None:
+    value = response.headers.get("Retry-After", "")
+    return float(value) if value.isdigit() else None
 
 
 def _checked(proxies: dict[str, str]) -> dict[str, str]:

@@ -29,13 +29,14 @@ How xf-crawl is put together, and the rules its code follows.
 | `link_index.py` | `LinkIndex`: what each stored page links to, in `links.jsonl`. A shortcut for the plan, not state: it can always be worked out again from the pages. |
 | `progress.py` | How far a crawl has got, by stage and by forum, and an estimate of the time left; `xf status` shows it. |
 | `xenforo.py` | What the crawler reads from a page's HTML: links, the title, the template name, whether it arrived whole. |
-| `fetching.py` | `PoliteFetcher`: the only module that sends the crawler's requests. Pacing, retries, and failing closed with a proxy. |
+| `fetching.py` | `PoliteFetcher`: the only module that sends the crawler's requests. Pacing, one attempt per page, and failing closed with a proxy. |
 | `browser.py` | `Browser`: the browser a crawl passes for, picked at random, with a version worked out from the date, and the headers it sends. |
 | `cookie_check.py` | Reads the cookie a site's script check asks for (a short page that sets a cookie and reloads), for the fetcher to set. |
 | `visitor.py` | `VisitorFile`: the browser and the site's cookies, kept from run to run in `visitor.json`. |
 | `proxy.py` | The `ProxyRoute` protocol, `FixedProxy`, `ProxyDown`, and `proxied_session`, which makes the proxy the only way out. |
 | `robots.py` | `RobotsRules`: the site's robots.txt, fetched through the fetcher, matched as `xf-crawl`. |
 | `crawler.py` | The crawl loop: `judge`, `connect`, `Crawl`. |
+| `trouble.py` | `Trouble`: the ladder of pauses, new servers and new visitors when pages keep failing, and when to stop. |
 | `config.py` | `CrawlConfig`: the start URL and proxy a store remembers. |
 | `stored_crawl.py` | A crawl as stored, for the commands that read one without crawling. |
 | `migration.py` | Converting older stores; the only module that knows their layouts. |

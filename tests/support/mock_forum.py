@@ -45,6 +45,9 @@ class Hit:
 class MockForum:
     gone: set[int] = field(default_factory=set)
     forbidden: set[int] = field(default_factory=set)
+    """Threads refused with a bare 403, as something in front of the forum turning a crawler away would."""
+    private: set[int] = field(default_factory=set)
+    """Threads refused with XenForo's own 403 page: no permission to view them."""
     checks_for_scripts: bool = False
     """Answer 418 and a script setting a cookie, as WordReference does, until the cookie is sent."""
     refuses_even_with_cookie: bool = False
@@ -154,7 +157,9 @@ class MockForum:
         if thread_id in self.gone:
             return 404, _page("error", "Oops", "not found"), {}
         if thread_id in self.forbidden:              # as a site turning a crawler away might
-            return 403, "Forbidden", {}
+            return 403, "<html><body><h1>403 Forbidden</h1><hr>nginx</body></html>", {}
+        if thread_id in self.private:
+            return 403, _page("error", "Oops", "You do not have permission to view this page"), {}
         if thread_id in self.error_once or thread_id in self.busy_once:
             return self._misbehave_once(thread_id)
         return None

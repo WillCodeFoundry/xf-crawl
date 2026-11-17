@@ -16,9 +16,10 @@ from urllib.parse import urlparse
 import requests
 
 from xfcrawl import config, migration
+from xfcrawl.browser import Browser
 from xfcrawl.commands.tunnelbear import ask_for_credentials, open_account
 from xfcrawl.config import CrawlConfig, ProxySetting, TunnelBearProxy, UrlProxy
-from xfcrawl.crawler import DEFAULT_GIVE_UP_AFTER, Connection, Crawl, CrawlSummary, connect
+from xfcrawl.crawler import Connection, Crawl, CrawlSummary, Remedies, connect
 from xfcrawl.errors import XfError
 from xfcrawl.failures import Backoff, RetryPolicy
 from xfcrawl.fetching import DEFAULT_DELAY, DEFAULT_JITTER, Pacing, PoliteFetcher
@@ -27,6 +28,7 @@ from xfcrawl.link_index import LinkIndex
 from xfcrawl.plan import CrawlPlan
 from xfcrawl.proxy import FixedProxy, ProxyRoute, proxied_session
 from xfcrawl.store import PageStore
+from xfcrawl.trouble import LONGEST_PAUSE, Trouble
 from xfcrawl.tunnelbear.account import Credentials
 from xfcrawl.tunnelbear.rotation import ServerRotation
 from xfcrawl.visitor import Visitor, VisitorFile
@@ -51,9 +53,9 @@ def add_parser(subparsers: "argparse._SubParsersAction[argparse.ArgumentParser]"
     parser.add_argument("--jitter", type=float, default=DEFAULT_JITTER,
                         help=f"up to this many extra seconds (default {DEFAULT_JITTER})")
     parser.add_argument("--max-fetches", type=int, metavar="N", help="stop after N requests")
-    parser.add_argument("--give-up-after", type=float, default=DEFAULT_GIVE_UP_AFTER, metavar="SECONDS",
-                        help="stop with an error when no page has come through for this long "
-                             f"(default {DEFAULT_GIVE_UP_AFTER:.0f})")
+    parser.add_argument("--longest-pause", type=float, default=LONGEST_PAUSE, metavar="SECONDS",
+                        help="the longest pause when pages keep failing, even if the site asks for longer "
+                             f"(default {LONGEST_PAUSE:.0f})")
     parser.add_argument("--retry-failed", action="store_true", help="retry failed pages now, without waiting")
     parser.add_argument("--cookie", help="a Cookie header, to crawl as a logged-in user")
     parser.add_argument("--ignore-robots", action="store_true", help="don't read or obey robots.txt")
@@ -95,7 +97,7 @@ def main(args: argparse.Namespace) -> int:
     open_route = partial(proxy_route, crawl_config.proxy, layout, os.environ, credentials)
     open_connection = partial(connect_to_site, crawl_config, args, os.environ, open_route, visitor)
     try:
-        crawl = Crawl(plan, store, open_connection, _now, time.monotonic, give_up_after=args.give_up_after)
+        crawl = Crawl(plan, store, open_connection, _now, time.monotonic, Trouble(args.longest_pause))
         summary = crawl.run(max_fetches=args.max_fetches)
     finally:
         visitor_file.save(visitor)
@@ -190,7 +192,19 @@ def connect_to_site(
     if route is not None:
         _LOGGER.info("Going through %s", route.describe())
     fetcher = PoliteFetcher(session, Pacing(args.delay, args.jitter), route)
-    return connect(fetcher, crawl_config.start_url, obey_robots=not args.ignore_robots)
+
+    def new_visitor() -> str:
+        visitor.browser = Browser.pick(random.Random(), date.today())
+        visitor.cookies.clear()  # the session's own jar
+        session.headers.update(visitor.browser.headers)
+        return visitor.browser.describe()
+
+    remedies = Remedies(new_server=_nothing if route is None else route.next_server, new_visitor=new_visitor)
+    return connect(fetcher, crawl_config.start_url, obey_robots=not args.ignore_robots, remedies=remedies)
+
+
+def _nothing() -> str | None:
+    return None
 
 
 def proxy_route(

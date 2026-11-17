@@ -39,6 +39,9 @@ class BrokenRoute:
     def failed(self, *, auth_problem: bool) -> None:
         raise AssertionError("never reached: nothing was sent")
 
+    def next_server(self) -> str | None:
+        raise AssertionError("never reached: nothing was sent")
+
     def describe(self) -> str:
         return "a broken route"
 
@@ -95,21 +98,22 @@ def test_a_page_followed_from_another_says_so(forum: MockForum):
     assert followed.headers["Sec-Fetch-Site"] == "same-origin"
 
 
-def test_a_busy_site_is_retried_with_its_retry_after(forum: MockForum):
+def test_a_busy_site_is_asked_once_and_its_retry_after_passed_on(forum: MockForum):
     forum.busy_once.add(11)
     waits = Waits()
     response = fetcher(waits).get(forum.url + "threads/thread-11.11/")
-    assert response.status == 200
-    assert waits.paused == [2.0]                      # the default first wait; Retry-After: 0 is shorter
+    assert (response.status, response.retry_after) == (503, 0.0)
+    assert forum.count("/threads/thread-11.11/") == 1
+    assert waits.paused == []
 
 
-def test_a_page_that_stays_down_fails_after_five_tries(forum: MockForum):
+def test_a_site_that_doesnt_answer_fails_at_once(forum: MockForum):
     forum.stop()
     waits = Waits()
     with pytest.raises(FetchFailed) as raised:
         fetcher(waits).get(forum.url)
     assert raised.value.reason == "network"
-    assert waits.paused == [2.0, 4.0, 8.0, 16.0]
+    assert waits.paused == []
 
 
 def test_a_redirect_reports_where_it_went(forum: MockForum):

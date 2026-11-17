@@ -26,7 +26,7 @@ uv run xf mine                              # statistics (--json for JSON)
 
 - **Level by level:** first the forum list, then every forum's thread list, then every thread's first page, then the threads' other pages. Stop it at any stage and you have everything above it: all forums, then all thread titles, then every thread's opening.
 - **Resumable:** stop it at any time, or let it crash. The next run fetches only what isn't stored yet.
-- **Polite:** about 1 to 1.5 seconds between requests (`--delay`, `--jitter`), robots.txt obeyed (`--ignore-robots` not to), and waits and retries when the site is busy.
+- **Polite:** about 1 to 1.5 seconds between requests (`--delay`, `--jitter`), robots.txt obeyed (`--ignore-robots` not to), and pauses when pages keep failing.
 - **Looks like a person browsing:**
   - **One browser:** the first run picks a common desktop browser at random (Chrome, Edge, Firefox or Safari, on Windows, macOS or Linux, a version or two from the latest) and sends its user agent and headers. Later runs keep it, updating its version as browsers update themselves. The first lines of a run say which, e.g. `Passing for Firefox 158 on Linux, back with 1 cookies`.
   - **Cookies:** the site's cookies are kept, within a run and from run to run, in `.crawl-store/visitor.json` (readable only by you). `--new-browser` starts afresh with a new browser and no cookies. `--cookie` replaces the kept cookies for that run.
@@ -34,8 +34,20 @@ uv run xf mine                              # statistics (--json for JSON)
   - **Script checks:** some sites, WordReference among them, answer a visitor they don't know yet with a short page whose script sets a cookie and reloads (WordReference uses HTTP 418 for it). A browser does this without anyone noticing; the crawler sets the cookie the page asks for and asks again, once. The cookie is then kept like any other.
   - **Breaks:** about one gap in a hundred is a break of 5 to 20 times `--delay`. That adds about a tenth to a crawl's time.
   - **robots.txt** rules are still matched as `xf-crawl`, falling back to the rules for every robot.
-- **Failures:** a page that can't be fetched is never stored. Its failures are recorded beside it and retried on later runs, waiting longer after each one: 1h, 2h, 4h… for temporary errors, 1d, 2d… for pages that look gone. A thread merged into another (its address redirects to the other thread) is recorded once and never tried again: the other thread is crawled instead. A page past a thread's end is rechecked, as the thread may grow. `--retry-failed` tries all of them now.
-- **Gives up when nothing comes through:** if no page has been stored for a minute (`--give-up-after SECONDS`), the run stops with an error and exit code 1: the site is down, the route has stopped working, or the crawler is being turned away. A deleted thread or a redirect counts as the site answering normally. A run stopped because the proxy failed also exits with 1.
+- **Failures:** a page that can't be fetched is never stored. Its failures are recorded beside it and tried again later, waiting longer after each failure: 15 min, 30 min, 1h… for trouble (below), coming back within the same run once its wait is over; 1d, 2d… for pages that look gone. A page is never asked again straight away. A thread merged into another (its address redirects to the other thread) is recorded once and never tried again: the other thread is crawled instead. A page past a thread's end is rechecked, as the thread may grow. `--retry-failed` tries all of them now.
+- **When pages keep failing:** an answer that may be about the crawler rather than the page is *trouble*: 429, a 403 from in front of the forum (not XenForo's own "no permission" page), 5xx, a 418 that persists, an error page, a timeout. Each page failing in a row for trouble takes a step up this ladder before the next request:
+
+  | Failing in a row | Pause | New proxy server | New visitor (browser, cookies dropped) |
+  |---|---|---|---|
+  | 1 | 30 s | | |
+  | 2 | 1 min | ✓ | |
+  | 3 | 2 min | ✓ | ✓ |
+  | 4 | 5 min | ✓ | ✓ |
+  | 5 | 10 min | ✓ | ✓ |
+  | 6 and on | 15 min | ✓ | ✓ |
+
+  A site's `Retry-After` lengthens a pause, and `--longest-pause SECONDS` (default 900) caps every one. A page that comes through, or a normal answer (a deleted, merged or private thread), goes back to the bottom. Without TunnelBear there's no other server to move to; a new visitor works either way. The ladder is `LADDER` in `src/xfcrawl/trouble.py`.
+- **Stops when that doesn't help:** after the 15-minute step has been tried three times in a row and the next page still fails (9 pages in a row, over about an hour, 7 servers and 6 visitors), the run stops with an error and exit code 1, saying what it tried and what the site answered. A run stopped because the proxy failed also exits with 1.
 
 ### Only some forums
 

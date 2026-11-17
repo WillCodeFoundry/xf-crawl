@@ -10,10 +10,11 @@ def failures(reason, count):
     return [Failure(T0, reason)] * count
 
 
-def test_wait_doubles_from_one_hour_for_temporary_problems():
+def test_wait_doubles_from_fifteen_minutes_for_temporary_problems():
     policy = RetryPolicy()
     assert [policy.wait_after(failures("http-503", n)) for n in (1, 2, 3)] == [
-        timedelta(hours=1), timedelta(hours=2), timedelta(hours=4)]
+        timedelta(minutes=15), timedelta(minutes=30), timedelta(hours=1)]
+    assert policy.wait_after(failures("refused", 1)) == timedelta(minutes=15)
 
 
 def test_wait_doubles_from_one_day_for_pages_that_look_gone():
@@ -28,7 +29,7 @@ def test_wait_is_capped_and_never_overflows():
 
 def test_next_try_counts_from_the_last_failure():
     history = [Failure(T0, "http-503"), Failure(T0 + timedelta(hours=5), "timeout")]
-    assert RetryPolicy().next_try(history) == T0 + timedelta(hours=7)
+    assert RetryPolicy().next_try(history) == T0 + timedelta(hours=5, minutes=30)
 
 
 def test_failures_round_trip_as_json_lines():

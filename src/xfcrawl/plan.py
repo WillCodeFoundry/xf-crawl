@@ -77,6 +77,8 @@ class CrawlPlan:
         # size to the number of threads, not pages.
         self._queue: list[tuple[Stage, int, int, int]] = []
         self._waiting: dict[PageRef, datetime] = {}
+        self._later: list[tuple[datetime, Stage, int, int]] = []
+        """Pages that failed during this run, by when they may be tried again in it."""
         self._site_prefix: str | None = None
         self._queued_by_stage: Counter[Stage] = Counter()
         self._listed_in: dict[int, int] = {}  # thread number -> forum number
@@ -179,7 +181,14 @@ class CrawlPlan:
     def retry_policy(self) -> RetryPolicy:
         return self._backoff.policy
 
-    def next_page(self) -> PageRef | None:
+    def next_page(self, now: datetime | None = None) -> PageRef | None:
+        """The next page to fetch: one that failed earlier in the run if its wait is over by ``now``, else
+        the next in crawl order."""
+        if now is not None and self._later and self._later[0][0] <= now:
+            _, stage, item_id, page = heapq.heappop(self._later)
+            ref = PageRef(stage.kind, item_id, page)
+            self._waiting.pop(ref, None)
+            return ref
         if not self._queue:
             return None
         stage, item_id, first, last = heapq.heappop(self._queue)
@@ -191,6 +200,11 @@ class CrawlPlan:
     def put_back(self, ref: PageRef) -> None:
         """Return a page taken with next_page but not attempted."""
         self._push(ref.stage, ref.item_id, ref.page, ref.page)
+
+    def retry_later(self, ref: PageRef, when: datetime) -> None:
+        """A page that failed, to be fetched again in this run once ``when`` has come."""
+        heapq.heappush(self._later, (when, ref.stage, ref.item_id, ref.page))
+        self._waiting[ref] = when
 
     def to_fetch(self) -> Iterator[PageRef]:
         """The pages to fetch, in the order they will be."""

@@ -48,6 +48,11 @@ class ProxyRoute(Protocol):
         when it can't."""
         ...
 
+    def next_server(self) -> str | None:
+        """Move to another server though this one works, as when the site turns the crawler away; says
+        which, or None if there is no other. Raises ProxyDown."""
+        ...
+
     def describe(self) -> str: ...
 
 
@@ -64,6 +69,9 @@ class FixedProxy:
 
     def failed(self, *, auth_problem: bool) -> None:
         """Nothing to switch to; the fetcher gives up after max_failures."""
+
+    def next_server(self) -> str | None:
+        return None
 
     def describe(self) -> str:
         return f"proxy {self._url}"
