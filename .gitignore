@@ -6,3 +6,5 @@ dist/
 .pytest_cache/
 .ruff_cache/
 .coverage
+# TunnelBear passwords, wherever the file ends up
+tunnelbear-credentials.json

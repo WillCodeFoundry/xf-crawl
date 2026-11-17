@@ -7,6 +7,7 @@ The login is kept in a TokenFile: the email, a device id and the tokens, never t
 import json
 import logging
 import os
+import random
 import threading
 import uuid
 from collections.abc import Callable, Mapping
@@ -68,6 +69,39 @@ class Endpoints:
 class Credentials:
     email: str
     password: str
+
+
+class CredentialsFile:
+    """TunnelBear accounts to log in with when no one is there to type, kept by hand in a JSON file that
+    only its owner can read::
+
+        [{"email": "me@example.com", "password": "..."}, {"email": "other@example.com", "password": "..."}]
+
+    Read when needed, never written; a login picks one account at random.
+    """
+
+    def __init__(self, path: Path, rng: random.Random | None = None) -> None:
+        self.path = path
+        self._rng = rng or random.Random()
+
+    def accounts(self) -> list[Credentials]:
+        """The accounts listed, or none if there is no file; raises TunnelBearError if it can't be used."""
+        if not self.path.exists():
+            return []
+        if os.name == "posix" and self.path.stat().st_mode & 0o077:
+            raise TunnelBearError(f"{self.path} holds passwords but others can read it; run: chmod 600 {self.path}")
+        try:
+            listed = json.loads(self.path.read_text(encoding="utf-8"))
+            accounts = [Credentials(str(entry["email"]), str(entry["password"])) for entry in listed]
+        except (ValueError, TypeError, KeyError) as error:
+            raise TunnelBearError(f"{self.path} should be a list of {{\"email\": ..., \"password\": ...}} "
+                                  f"({type(error).__name__}: {error})") from error
+        return [account for account in accounts if account.email and account.password]
+
+    def pick(self) -> Credentials | None:
+        """One of the accounts, at random, or None if none are listed."""
+        accounts = self.accounts()
+        return self._rng.choice(accounts) if accounts else None
 
 
 class TokenFile:
@@ -206,7 +240,8 @@ class TunnelBearAccount:
         if credentials is None:
             raise TunnelBearError(
                 f"TunnelBear no longer accepts the saved login ({refusal}); log in again with "
-                "`uv run xf tunnelbear login`, or set TB_USER and TB_PASS to have it done for you",
+                "`uv run xf tunnelbear login`, or list accounts in tunnelbear-credentials.json to have it done "
+                "for you",
                 refusal.status,
             ) from refusal
         _LOGGER.info("TunnelBear no longer accepts the saved login; logging in again as %s", credentials.email)

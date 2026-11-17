@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import random
 import ssl
 import threading
 from pathlib import Path
@@ -10,8 +11,16 @@ from pathlib import Path
 import pytest
 import requests
 
+from tests.support.mock_tunnelbear import CREDENTIALS_FILE, EMAIL, PASSWORD, write_credentials
 from xfcrawl.errors import XfError
-from xfcrawl.tunnelbear.account import Credentials, Endpoints, TokenFile, TunnelBearAccount, TunnelBearError
+from xfcrawl.tunnelbear.account import (
+    Credentials,
+    CredentialsFile,
+    Endpoints,
+    TokenFile,
+    TunnelBearAccount,
+    TunnelBearError,
+)
 from xfcrawl.tunnelbear.local_proxy import LocalProxy
 from xfcrawl.tunnelbear.rotation import ServerRotation
 
@@ -63,12 +72,12 @@ def test_fetch_goes_through_tunnelbear(forum, tunnelbear, xf, tmp_path):
     assert forum.direct_hits() == []
 
 
-def test_without_a_login_or_credentials_the_message_says_what_to_do(tunnelbear, xf, environment):
-    environment.unset_env("TB_USER")
-    environment.unset_env("TB_PASS")
+def test_without_a_login_or_credentials_the_message_says_what_to_do(tunnelbear, xf):
+    CREDENTIALS_FILE.unlink()
     result = xf("tunnelbear", "countries")
     assert result.code == 1
-    assert "xf tunnelbear login" in result.err
+    assert "uv run xf tunnelbear login" in result.err
+    assert "tunnelbear-credentials.json" in result.err
 
 
 def test_an_account_with_mfa_cant_log_in_without_a_prompt(tunnelbear):
@@ -112,22 +121,20 @@ def expire_the_saved_login(tunnelbear, xf):
     tunnelbear.expired_access, tunnelbear.refused_refresh = {"a1"}, {"r1"}
 
 
-def test_a_refused_login_is_renewed_from_tb_user_and_tb_pass(forum, tunnelbear, xf):
+def test_a_refused_login_is_renewed_from_the_credentials_file(forum, tunnelbear, xf):
     expire_the_saved_login(tunnelbear, xf)
     result = xf("crawl", forum.url, "--tunnelbear", "FR")
     assert result.code == 0, result.out
     assert "no longer accepts the saved login; logging in again as me@example.com" in result.err
-    assert tunnelbear.logins == 2
+    assert tunnelbear.logins == [EMAIL, EMAIL]
     assert json.loads(TOKENS.read_text())["refresh_token"] == "r2"
-    assert "not-a-real-password" not in TOKENS.read_text()
+    assert PASSWORD not in TOKENS.read_text()
     assert forum.direct_hits() == []
 
 
-def test_without_tb_user_and_tb_pass_a_refused_login_stops_the_crawl_saying_what_to_do(
-        forum, tunnelbear, xf, environment):
+def test_without_credentials_a_refused_login_stops_the_crawl_saying_what_to_do(forum, tunnelbear, xf):
     expire_the_saved_login(tunnelbear, xf)
-    environment.unset_env("TB_USER")
-    environment.unset_env("TB_PASS")
+    CREDENTIALS_FILE.unlink()
     result = xf("crawl", forum.url, "--tunnelbear", "FR")
     assert result.code == 1
     assert "no longer accepts the saved login" in result.out
@@ -138,3 +145,35 @@ def test_without_tb_user_and_tb_pass_a_refused_login_stops_the_crawl_saying_what
 def test_tunnelbear_being_down_is_not_mistaken_for_a_refused_login(tunnelbear):
     refused, down = TunnelBearError("x", 401), TunnelBearError("x", 503)
     assert refused.refused and not down.refused and not TunnelBearError("x").refused
+
+
+def test_logins_without_a_terminal_pick_an_account_at_random(tunnelbear, xf):
+    write_credentials([(f"bear{n}@example.com", "pw") for n in range(5)])
+    for _ in range(12):
+        assert xf("tunnelbear", "login").code == 0
+    assert len(set(tunnelbear.logins)) > 1
+    assert set(tunnelbear.logins) <= {f"bear{n}@example.com" for n in range(5)}
+
+
+def test_the_credentials_file_is_refused_if_others_can_read_it(tunnelbear, xf):
+    CREDENTIALS_FILE.chmod(0o644)
+    result = xf("tunnelbear", "login")
+    assert result.code == 1
+    assert "others can read it; run: chmod 600" in result.err
+    assert tunnelbear.logins == []
+
+
+@pytest.mark.parametrize("content", ["{", '{"email": "x"}', '[{"email": "x"}]', '["x"]'])
+def test_a_malformed_credentials_file_says_what_it_should_be(tunnelbear, xf, content):
+    CREDENTIALS_FILE.write_text(content)
+    result = xf("tunnelbear", "login")
+    assert result.code == 1
+    assert 'should be a list of {"email": ..., "password": ...}' in result.err
+
+
+def test_accounts_missing_an_email_or_password_are_skipped(tmp_path):
+    path = tmp_path / "creds.json"
+    path.write_text(json.dumps([{"email": "", "password": "p"}, {"email": "a@b", "password": "p"}]))
+    path.chmod(0o600)
+    assert CredentialsFile(path, random.Random(1)).accounts() == [Credentials("a@b", "p")]
+    assert CredentialsFile(tmp_path / "missing.json").pick() is None

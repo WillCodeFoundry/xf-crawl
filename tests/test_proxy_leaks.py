@@ -11,6 +11,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from tests.support.mock_tunnelbear import EMAIL, PASSWORD
 from xfcrawl.crawler import Crawl, connect
 from xfcrawl.failures import Backoff, RetryPolicy
 from xfcrawl.fetching import Pacing, PoliteFetcher
@@ -92,7 +93,7 @@ def test_a_token_renewal_failing_mid_crawl_stops_it(forum, tunnelbear):
     layout = StoreLayout.in_directory(Path.cwd())
     account = TunnelBearAccount(Endpoints.from_environment(os.environ), TokenFile(layout.tunnelbear_tokens),
                                 proxied_session(None))
-    account.login(Credentials(os.environ["TB_USER"], os.environ["TB_PASS"]), mfa_code=None)
+    account.login(Credentials(EMAIL, PASSWORD), mfa_code=None)
     rotation = ServerRotation(account, "FR", renew_every=0)   # renew before every request
     store = PageStore.open(layout)
     plan = CrawlPlan(forum.url, store, LinkIndex(layout.link_index), Backoff(RetryPolicy(), datetime.now(timezone.utc)))

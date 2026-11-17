@@ -82,6 +82,11 @@ class StoreLayout:
         return self.root / "tunnelbear.json"
 
     @property
+    def tunnelbear_credentials(self) -> Path:
+        """TunnelBear accounts to log in with when no one is there to type: kept by you, never written."""
+        return self.root / "tunnelbear-credentials.json"
+
+    @property
     def pages_dir(self) -> Path:
         return self.root / "pages"
 

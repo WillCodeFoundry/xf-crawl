@@ -72,9 +72,27 @@ uv run xf tunnelbear serve -c FR --port 8118   # a local proxy any program can u
 
 `xf tunnelbear login` saves login tokens, never your password, in `.crawl-store/tunnelbear.json` in the current directory (readable only by you). The tokens are renewed automatically, so you only log in again after `uv run xf tunnelbear logout` or if TunnelBear revokes them. The login belongs to the directory: log in in each crawl directory that uses TunnelBear, or set `TB_STATE=/path/to/file.json` to share one.
 
-Without a terminal to type into (cron, scripts), set `TB_USER` and `TB_PASS` instead. They are only used when no login is saved, and don't work for accounts with MFA.
+#### Logging in without anyone typing
 
-The saved login is kept alive on its own: tokens are refreshed as TunnelBear asks. If TunnelBear stops accepting it (it expired after a long break, or was revoked), a crawl logs in again with `TB_USER` and `TB_PASS` if they are set, without stopping; otherwise it stops, nothing sent, and says to run `uv run xf tunnelbear login`.
+List one or more accounts in `.crawl-store/tunnelbear-credentials.json`, readable only by you (xf refuses it otherwise). Git ignores it, wherever it is:
+
+```bash
+mkdir -p .crawl-store
+cat > .crawl-store/tunnelbear-credentials.json <<'JSON'
+[
+  {"email": "me@example.com", "password": "..."},
+  {"email": "other@example.com", "password": "..."}
+]
+JSON
+chmod 600 .crawl-store/tunnelbear-credentials.json
+```
+
+Whenever a login is needed and nobody is there to type, xf picks one of these accounts at random:
+
+- **No saved login:** a crawl, or `xf tunnelbear login` without a terminal, logs in with one. `xf tunnelbear login` in a terminal still asks, so you can choose the account; press Enter at the prompts to pick from the file instead.
+- **Saved login refused:** the tokens are refreshed as TunnelBear asks, so a saved login lasts. If TunnelBear stops accepting it (it expired after a long break, or was revoked), a crawl logs in again with an account from the file and carries on. Without the file it stops, nothing sent, and says to run `uv run xf tunnelbear login`.
+
+xf only reads this file, never writes it; the passwords stay there and nowhere else. Accounts with MFA can't log in this way.
 
 This uses TunnelBear's private API, as its browser extension does; it can change without notice, and using it may conflict with TunnelBear's terms. Every page counts against the account's data allowance.
 
@@ -94,6 +112,7 @@ URL-encode special characters in the username and password (`@` -> `%40`, `:` ->
   config.json                                                   start URL and proxy setting
   links.jsonl                                                   what each page links to, so restarts are quick
   tunnelbear.json                                               TunnelBear login tokens (if used)
+  tunnelbear-credentials.json                                   TunnelBear accounts, kept by you (if used)
   visitor.json                                                  the browser the crawl passes for, and the site's cookies
   pages/index.html.gz
   pages/forums/french-english.46/page-0001.html.gz

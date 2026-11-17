@@ -92,7 +92,7 @@ def main(args: argparse.Namespace) -> int:
     visitor_file.save(visitor)
     back = f"back with {len(visitor.cookies)} cookies" if visitor.returning else "visiting for the first time"
     _LOGGER.info("Passing for %s, %s", visitor.browser.describe(), back)
-    credentials = ask_for_credentials(os.environ, interactive=sys.stdin.isatty())
+    credentials = ask_for_credentials(layout, interactive=sys.stdin.isatty())
     open_route = partial(proxy_route, crawl_config.proxy, layout, os.environ, credentials)
     open_connection = partial(connect_to_site, crawl_config, args, os.environ, open_route, visitor)
     try:
