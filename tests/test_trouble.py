@@ -14,9 +14,8 @@ def climb(trouble: Trouble, pages: int, reason: str = "refused") -> list[Step | 
 
 
 def test_the_ladder_as_agreed():
-    assert [(s.pause, s.new_server, s.new_visitor) for s in LADDER] == [
-        (30, False, False), (60, True, False), (120, True, True), (300, True, True), (600, True, True),
-        (900, True, True)]
+    assert [(s.pause, s.new_server) for s in LADDER] == [
+        (30, False), (60, True), (120, True), (300, True), (600, True), (900, True)]
     assert LONGEST_PAUSE == 900 and TOP_STEP_TRIES == 3
 
 
@@ -29,17 +28,17 @@ def test_each_page_failing_in_a_row_climbs_a_step_and_the_top_is_tried_three_tim
 def test_what_was_tried_is_counted_for_the_stop_message():
     trouble = Trouble()
     climb(trouble, 9, "refused")
-    assert (trouble.servers, trouble.visitors) == (7, 6)
+    assert trouble.servers == 7
     message = trouble.why_stop(now=60.0 * 8 + 3600)
-    assert message.startswith("no page has come through for 68 min, 9 pages in a row, despite pauses, "
-                              "7 new servers and 6 new visitors; the answers: refused x9.")
+    assert message.startswith("no page has come through for 68 min, 9 pages in a row, despite pauses and "
+                              "7 new servers and visitors; the answers: refused x9.")
 
 
 def test_one_good_page_goes_back_to_the_bottom():
     trouble = Trouble()
     climb(trouble, 5)
     trouble.recovered()
-    assert (trouble.in_a_row, trouble.servers, trouble.visitors) == (0, 0, 0)
+    assert (trouble.in_a_row, trouble.servers) == (0, 0)
     assert pause_after(trouble, "refused") == 30
 
 

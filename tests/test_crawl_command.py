@@ -229,8 +229,8 @@ def test_pages_failing_in_a_row_climb_the_ladder_and_a_good_page_resets_it(forum
     result = xf("crawl", forum.url)
     assert result.code == 0, result.out
     assert "1 pages failing in a row: pausing 0s\n" in result.err
-    assert "2 pages failing in a row: pausing 0s, no other server\n" in result.err   # crawling directly
-    assert "3 pages failing in a row: pausing 0s, no other server, new visitor (" in result.err
+    assert "2 pages failing in a row: pausing 0s, no other server; new visitor (" in result.err   # direct
+    assert "3 pages failing in a row: pausing 0s, no other server; new visitor (" in result.err
     assert "4 pages failing in a row" not in result.err
     assert forum.count("/threads/thread-13.13/") == 1
 
@@ -247,8 +247,8 @@ def test_a_new_visitor_drops_the_sites_cookies(forum, xf):
     xf("crawl", forum.url)
     def cookies_on(path):
         return [hit.headers.get("Cookie", "") for hit in forum.hits if hit.path == path]
-    assert cookies_on("/threads/thread-12.12/") == ["xf_session=s1"]          # before the third failure
-    assert cookies_on("/threads/thread-13.13/") == [""]                       # after: a new visitor
+    assert cookies_on("/threads/thread-11.11/") == ["xf_session=s1"]          # before the second failure
+    assert cookies_on("/threads/thread-12.12/") == [""]                       # after: a new visitor
 
 
 def test_a_refused_page_is_retried_within_the_hour(forum, xf):

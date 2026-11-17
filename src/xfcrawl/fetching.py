@@ -5,6 +5,10 @@ whatever the site answers is returned, and what to do about a failure is the cra
 Two things are asked again at once, as neither is the page's doing: a proxy failure, on the proxy's next
 server, and a site's cookie check (cookie_check.py). With a proxy, it fails closed: when the proxy can't be
 used at all it raises ProxyDown. Nothing is ever sent without the proxy.
+
+Whenever the proxy's server changes, for whatever reason (its turn is up, it failed, the crawl asked for
+another), the fetcher starts a new visitor before the next request: a site that saw a visitor's cookies from
+one address shouldn't see them from another.
 """
 
 import logging
@@ -98,10 +102,19 @@ class Pacing:
 
 
 class PoliteFetcher:
-    def __init__(self, session: requests.Session, pacing: Pacing, route: ProxyRoute | None) -> None:
+    def __init__(
+        self,
+        session: requests.Session,
+        pacing: Pacing,
+        route: ProxyRoute | None,
+        new_visitor: Callable[[], str] | None = None,
+    ) -> None:
+        """``new_visitor`` changes the session's browser and drops its cookies, saying which browser."""
         self._session = session
         self.pacing = pacing
         self._route = route
+        self._new_visitor = new_visitor
+        self._server: str | None = None
 
     def get(self, url: str, referer: str | None = None) -> Response:
         response = self._get(url, referer)
@@ -116,6 +129,8 @@ class PoliteFetcher:
             self.pacing.wait_turn()
             route = self._route
             proxies = None if route is None else _checked(route.proxies())
+            if route is not None:
+                self._same_visitor_only_on_the_same_server(route.server)
             try:
                 response = self._session.get(url, headers=headers, timeout=_TIMEOUT_SECONDS, proxies=proxies)
             except (requests.exceptions.ProxyError, requests.exceptions.SSLError) as error:
@@ -127,14 +142,23 @@ class PoliteFetcher:
                 continue  # not the page's fault
             except requests.RequestException as error:
                 self.pacing.request_done()
+                self._server = None if route is None else route.server  # it may have reached the site
                 reason = "timeout" if isinstance(error, requests.Timeout) else "network"
                 raise FetchFailed(reason, str(error)) from error
             self.pacing.request_done()
             if response.status_code == 407 and route is not None:
                 proxy_failures += 1
                 _switch(route, "407 Proxy Authentication Required", proxy_failures, auth_problem=True)
-                continue
+                continue  # the proxy refused it: the site never saw it
+            self._server = None if route is None else route.server  # the site has seen us from here
             return Response(response.status_code, response.url, response.text, _retry_after(response))
+
+    def _same_visitor_only_on_the_same_server(self, server: str) -> None:
+        """A new visitor if the site would see this one from another server than it last did. A server that
+        failed before reaching the site (a proxy error) doesn't count: the site never saw it."""
+        if self._server is not None and server != self._server and self._new_visitor is not None:
+            _LOGGER.info("    now through %s: new visitor (%s)", server, self._new_visitor())
+            self._server = server
 
     def _set_asked_cookie(self, response: Response) -> bool:
         """Whether ``response`` is a page checking for a browser by asking for a cookie; if so, the cookie

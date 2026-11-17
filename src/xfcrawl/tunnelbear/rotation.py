@@ -149,6 +149,10 @@ class ServerRotation:
         self._move_on()
         return self._where()
 
+    @property
+    def server(self) -> str:
+        return self.host
+
     def describe(self) -> str:
         countries = len({server.country for server in self.servers})
         return f"TunnelBear, {len(self.servers)} servers in {countries} countries, using {self._where()}"

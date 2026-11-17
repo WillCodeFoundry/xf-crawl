@@ -191,7 +191,6 @@ def connect_to_site(
         session.headers["Cookie"] = args.cookie
     if route is not None:
         _LOGGER.info("Going through %s", route.describe())
-    fetcher = PoliteFetcher(session, Pacing(args.delay, args.jitter), route)
 
     def new_visitor() -> str:
         visitor.browser = Browser.pick(random.Random(), date.today())
@@ -199,6 +198,7 @@ def connect_to_site(
         session.headers.update(visitor.browser.headers)
         return visitor.browser.describe()
 
+    fetcher = PoliteFetcher(session, Pacing(args.delay, args.jitter), route, new_visitor)
     remedies = Remedies(new_server=_nothing if route is None else route.next_server, new_visitor=new_visitor)
     return connect(fetcher, crawl_config.start_url, obey_robots=not args.ignore_robots, remedies=remedies)
 

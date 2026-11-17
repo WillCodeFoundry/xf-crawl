@@ -53,6 +53,11 @@ class ProxyRoute(Protocol):
         which, or None if there is no other. Raises ProxyDown."""
         ...
 
+    @property
+    def server(self) -> str:
+        """The server requests go out through now; the site sees its address."""
+        ...
+
     def describe(self) -> str: ...
 
 
@@ -72,6 +77,10 @@ class FixedProxy:
 
     def next_server(self) -> str | None:
         return None
+
+    @property
+    def server(self) -> str:
+        return self._url
 
     def describe(self) -> str:
         return f"proxy {self._url}"

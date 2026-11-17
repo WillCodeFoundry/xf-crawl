@@ -81,7 +81,7 @@ def _nothing() -> str | None:
 @dataclass(frozen=True)
 class Remedies:
     """What the crawl can change when pages keep failing; each says what it changed to, or None if it
-    can't (no proxy servers to move between, say)."""
+    can't (no proxy servers to move between, say). A new server brings its own new visitor (fetching.py)."""
 
     new_server: Callable[[], str | None] = _nothing
     new_visitor: Callable[[], str | None] = _nothing
@@ -191,9 +191,10 @@ class Crawl:
             return False
         changes = [f"pausing {step.pause:.0f}s"]
         if step.new_server:
-            changes.append(f"new server {where}" if (where := remedies.new_server()) else "no other server")
-        if step.new_visitor:
-            changes.append(f"new visitor ({who})" if (who := remedies.new_visitor()) else "no new visitor")
+            if where := remedies.new_server():
+                changes.append(f"new server {where}, with a new visitor")
+            else:
+                changes.append(f"no other server; new visitor ({remedies.new_visitor()})")
         _LOGGER.info("    %d pages failing in a row: %s", self.trouble.in_a_row, ", ".join(changes))
         self.pause(step.pause)
         return True
