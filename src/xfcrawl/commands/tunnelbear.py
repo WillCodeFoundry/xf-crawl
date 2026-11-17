@@ -9,6 +9,7 @@ import ssl
 import sys
 from collections.abc import Callable, Mapping
 from datetime import date
+from functools import partial
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -93,8 +94,15 @@ def token_path(layout: StoreLayout, environment: Mapping[str, str]) -> Path:
 def open_account(layout: StoreLayout, environment: Mapping[str, str]) -> TunnelBearAccount:
     """The account whose login is saved here; its API is reached directly, not through any proxy."""
     return TunnelBearAccount(
-        Endpoints.from_environment(environment), TokenFile(token_path(layout, environment)), requests.Session()
+        Endpoints.from_environment(environment), TokenFile(token_path(layout, environment)), requests.Session(),
+        relogin=partial(credentials_in, environment),
     )
+
+
+def credentials_in(environment: Mapping[str, str]) -> Credentials | None:
+    """The email and password in TB_USER and TB_PASS, if both are set."""
+    email, password = environment.get("TB_USER"), environment.get("TB_PASS")
+    return Credentials(email, password) if email and password else None
 
 
 def logged_in_account(layout: StoreLayout, environment: Mapping[str, str]) -> TunnelBearAccount:
@@ -109,6 +117,8 @@ def ask_for_credentials(environment: Mapping[str, str], *, interactive: bool) ->
     terminal, ask. Asked only when needed, so a saved login never prompts."""
 
     def credentials() -> Credentials:
+        if (given := credentials_in(environment)) is not None:
+            return given
         email = environment.get("TB_USER") or (input("TunnelBear email: ") if interactive else "")
         password = environment.get("TB_PASS") or (getpass.getpass("TunnelBear password: ") if interactive else "")
         if not email or not password:

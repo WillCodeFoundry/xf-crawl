@@ -104,3 +104,37 @@ def test_serve_relays_requests_through_tunnelbear(forum, tunnelbear):
     assert "Forums" in response.text
     assert forum.direct_hits() == []
     assert tunnelbear.forwarded == [forum.url]
+
+
+def expire_the_saved_login(tunnelbear, xf):
+    """Log in, then have TunnelBear refuse both the access token and the refresh token it gave."""
+    assert xf("tunnelbear", "login").code == 0
+    tunnelbear.expired_access, tunnelbear.refused_refresh = {"a1"}, {"r1"}
+
+
+def test_a_refused_login_is_renewed_from_tb_user_and_tb_pass(forum, tunnelbear, xf):
+    expire_the_saved_login(tunnelbear, xf)
+    result = xf("crawl", forum.url, "--tunnelbear", "FR")
+    assert result.code == 0, result.out
+    assert "no longer accepts the saved login; logging in again as me@example.com" in result.err
+    assert tunnelbear.logins == 2
+    assert json.loads(TOKENS.read_text())["refresh_token"] == "r2"
+    assert "not-a-real-password" not in TOKENS.read_text()
+    assert forum.direct_hits() == []
+
+
+def test_without_tb_user_and_tb_pass_a_refused_login_stops_the_crawl_saying_what_to_do(
+        forum, tunnelbear, xf, environment):
+    expire_the_saved_login(tunnelbear, xf)
+    environment.unset_env("TB_USER")
+    environment.unset_env("TB_PASS")
+    result = xf("crawl", forum.url, "--tunnelbear", "FR")
+    assert result.code == 1
+    assert "no longer accepts the saved login" in result.out
+    assert "uv run xf tunnelbear login" in result.out
+    assert forum.hits == []
+
+
+def test_tunnelbear_being_down_is_not_mistaken_for_a_refused_login(tunnelbear):
+    refused, down = TunnelBearError("x", 401), TunnelBearError("x", 503)
+    assert refused.refused and not down.refused and not TunnelBearError("x").refused

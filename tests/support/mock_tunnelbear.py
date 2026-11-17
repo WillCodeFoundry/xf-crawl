@@ -39,6 +39,9 @@ class MockTunnelBear:
         self.user_calls_allowed: int | None = None  # after this many /user calls the API answers 500
         self.mfa = False                            # the account asks for an MFA code at login
         self.mfa_codes: list[str] = []              # the codes it was sent
+        self.logins = 0                             # password logins; the nth hands out a<n> and r<n>
+        self.expired_access: set[str] = set()       # access tokens PolarBear's /auth refuses
+        self.refused_refresh: set[str] = set()      # refresh tokens the dashboard refuses
         self.forwarded: list[str] = []              # URLs the proxy forwarded
         self.rejected = 0             # 407s
         self.ca = trustme.CA()
@@ -48,15 +51,25 @@ class MockTunnelBear:
     # ---------------------------------------------------------------- API
     def api_post(self, path: str, body: dict[str, Any]) -> ApiReply:
         if path.endswith("/v2/token"):
-            if self.mfa and body.get("grant_type") == "password":
-                return 200, {"mfa_type": "totp", "login_token": "lt1"}, {}
-            return 200, {"access_token": "a1", "refresh_token": "r1"}, {}
+            return self._token(body)
         if path == "/v2/mfa":
             self.mfa_codes.append(body["mfa_token"])
             return 200, {"access_token": "a1", "refresh_token": "r1"}, {}
         if path == "/auth":
+            if body.get("token") in self.expired_access:
+                return 401, {"message": "token expired"}, {}
             return 200, {}, {"Authorization": "Bearer pb1"}
         return 404, {"message": "not found"}, {}
+
+    def _token(self, body: dict[str, Any]) -> ApiReply:
+        if body.get("grant_type") == "refresh_token":
+            if body.get("refresh_token") in self.refused_refresh:
+                return 401, {"message": "invalid refresh token"}, {}
+            return 200, {"access_token": "a1", "refresh_token": "r1"}, {}
+        if self.mfa:
+            return 200, {"mfa_type": "totp", "login_token": "lt1"}, {}
+        self.logins += 1
+        return 200, {"access_token": f"a{self.logins}", "refresh_token": f"r{self.logins}"}, {}
 
     def api_get(self, path: str) -> ApiReply:
         if path == "/user":

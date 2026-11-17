@@ -5,6 +5,7 @@ The login is kept in a TokenFile: the email, a device id and the tokens, never t
 """
 
 import json
+import logging
 import os
 import threading
 import uuid
@@ -26,10 +27,21 @@ _APP_HEADERS = {
     "tunnelbear-platform-version": "",
 }
 _EXPIRED_TOKEN_STATUSES = frozenset({400, 401, 424})
+_LOGGER = logging.getLogger(__name__)
 
 
 class TunnelBearError(XfError):
     """TunnelBear refused or failed a request; the message says which, and what it answered."""
+
+    def __init__(self, message: str, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
+        """The HTTP status TunnelBear answered with, if it answered."""
+
+    @property
+    def refused(self) -> bool:
+        """Whether TunnelBear refused the request (a 4xx), rather than failing to answer it."""
+        return self.status is not None and 400 <= self.status < 500
 
 
 @dataclass(frozen=True)
@@ -83,9 +95,18 @@ class TokenFile:
 
 
 class TunnelBearAccount:
-    def __init__(self, endpoints: Endpoints, tokens: TokenFile, http: requests.Session) -> None:
-        """``http`` talks to TunnelBear's API directly, as the extension does; it is not the proxy."""
+    def __init__(
+        self,
+        endpoints: Endpoints,
+        tokens: TokenFile,
+        http: requests.Session,
+        relogin: Callable[[], Credentials | None] = lambda: None,
+    ) -> None:
+        """``http`` talks to TunnelBear's API directly, as the extension does; it is not the proxy.
+        ``relogin`` gives the email and password to log in with again if TunnelBear refuses the saved
+        login, or None; it must not ask anyone, as it is called in the middle of a crawl."""
         self.endpoints = endpoints
+        self._relogin = relogin
         self._tokens = tokens
         self._http = http
         self._state = tokens.load()
@@ -166,10 +187,30 @@ class TunnelBearAccount:
     def _refresh(self) -> None:
         if not self.is_logged_in():
             raise TunnelBearError("not logged in to TunnelBear; run `xf tunnelbear login`")
-        self._store_tokens(self._post(self.endpoints.dashboard, "/v2/token", {
-            "username": self._state.get("email", ""), "refresh_token": self._state["refresh_token"],
-            "grant_type": "refresh_token", "device": self._state["device"],
-        }))
+        try:
+            body = self._post(self.endpoints.dashboard, "/v2/token", {
+                "username": self._state.get("email", ""), "refresh_token": self._state["refresh_token"],
+                "grant_type": "refresh_token", "device": self._state["device"],
+            })
+        except TunnelBearError as error:
+            if not error.refused:
+                raise
+            self._log_in_again(error)
+            return
+        self._store_tokens(body)
+
+    def _log_in_again(self, refusal: TunnelBearError) -> None:
+        """TunnelBear refused the saved login (it expired, or was revoked): log in again if ``relogin``
+        gives credentials."""
+        credentials = self._relogin()
+        if credentials is None:
+            raise TunnelBearError(
+                f"TunnelBear no longer accepts the saved login ({refusal}); log in again with "
+                "`uv run xf tunnelbear login`, or set TB_USER and TB_PASS to have it done for you",
+                refusal.status,
+            ) from refusal
+        _LOGGER.info("TunnelBear no longer accepts the saved login; logging in again as %s", credentials.email)
+        self.login(credentials, mfa_code=None)
 
     def _polarbear_auth(self, *, may_refresh: bool) -> None:
         if not self._state.get("access_token"):
@@ -217,4 +258,5 @@ def _raise_for(response: requests.Response) -> None:
         message = body.get("error_message") or body.get("message") or json.dumps(body)[:200]
     except ValueError:
         message = response.text[:200]
-    raise TunnelBearError(f"{response.request.method} {response.url} -> HTTP {response.status_code}: {message}")
+    raise TunnelBearError(f"{response.request.method} {response.url} -> HTTP {response.status_code}: {message}",
+                          response.status_code)

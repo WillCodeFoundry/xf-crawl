@@ -74,6 +74,8 @@ uv run xf tunnelbear serve -c FR --port 8118   # a local proxy any program can u
 
 Without a terminal to type into (cron, scripts), set `TB_USER` and `TB_PASS` instead. They are only used when no login is saved, and don't work for accounts with MFA.
 
+The saved login is kept alive on its own: tokens are refreshed as TunnelBear asks. If TunnelBear stops accepting it (it expired after a long break, or was revoked), a crawl logs in again with `TB_USER` and `TB_PASS` if they are set, without stopping; otherwise it stops, nothing sent, and says to run `uv run xf tunnelbear login`.
+
 This uses TunnelBear's private API, as its browser extension does; it can change without notice, and using it may conflict with TunnelBear's terms. Every page counts against the account's data allowance.
 
 ### Any other proxy
