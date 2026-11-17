@@ -187,6 +187,10 @@ class Crawl:
             self.plan.note_link(reject.redirect_target)
         failure = Failure(self.now(), reject.reason, url, reject.detail)
         history = self.store.record_failure(ref, failure, self.plan.slug(ref.item))
+        if (merged_into := failure.merged_into) is not None:
+            _LOGGER.info("    %s %d was merged into or moved to %s %d; not stored, not tried again",
+                         ref.kind.value, ref.item_id, merged_into.kind.value, merged_into.item_id)
+            return
         next_try = self.plan.retry_policy.next_try(history)
         _LOGGER.info("    ! %s; not stored; attempt %d, next try after %s",
                      reject.message, len(history), next_try.astimezone().strftime("%Y-%m-%d %H:%M"))

@@ -6,11 +6,17 @@ A page's failures are kept as JSON lines, one per attempt, appended in order:
     {"time": "...", "reason": "redirect", "url": "http://x/threads/a.12/page-3", "detail": "http://x/threads/a.12/page-2"}
 
 Reasons: ``http-<status>``, ``timeout``, ``network``, ``error-page``, ``redirect``, ``robots``.
+
+A redirect to another thread or forum (``detail``) means the page's thread was merged into it, or moved: that
+is final, and the page is never tried again unless asked (``--retry-failed``). A redirect within the same
+thread, as for a page past its end, is retried like any page that looks gone, as the thread may grow.
 """
 
 import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+
+from xfcrawl.urls import ItemRef, parse_page_url
 
 PERMANENT_REASONS = frozenset({"http-401", "http-403", "http-404", "http-410", "redirect", "robots"})
 
@@ -21,6 +27,16 @@ class Failure:
     reason: str
     url: str = ""
     detail: str = ""
+
+    @property
+    def merged_into(self) -> ItemRef | None:
+        """The thread or forum this page's own was merged into or moved to, if this was such a redirect."""
+        if self.reason != "redirect":
+            return None
+        asked, went = parse_page_url(self.url), parse_page_url(self.detail)
+        if asked is None or went is None or asked.ref.item == went.ref.item:
+            return None
+        return went.ref.item
 
     @property
     def is_permanent(self) -> bool:
@@ -84,6 +100,10 @@ class Backoff:
     policy: RetryPolicy
     now: datetime
     ignore: bool = False
+
+    def settled(self, failures: list[Failure]) -> bool:
+        """Whether the page is never to be tried again: its thread was merged into another, or moved."""
+        return bool(failures) and not self.ignore and failures[-1].merged_into is not None
 
     def waiting_until(self, failures: list[Failure]) -> datetime | None:
         """When the page may be tried again, or None if it may be now."""

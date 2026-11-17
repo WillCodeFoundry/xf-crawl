@@ -301,7 +301,10 @@ class CrawlPlan:
     def _to_fetch_now(self, ref: PageRef) -> bool:
         if self._store.is_stored(ref):
             return False
-        waiting_until = self._backoff.waiting_until(self._store.failures(ref))
+        failures = self._store.failures(ref)
+        if self._backoff.settled(failures):
+            return False
+        waiting_until = self._backoff.waiting_until(failures)
         if waiting_until is not None:
             self._waiting[ref] = waiting_until
             return False
