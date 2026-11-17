@@ -63,12 +63,14 @@ With a proxy set, the crawler never connects to the forum directly. If the proxy
 
 ```bash
 uv run xf tunnelbear login                     # once; asks for email, password (and MFA code)
-uv run xf crawl https://forum.example/ --tunnelbear FR
+uv run xf crawl https://forum.example/ --tunnelbear
 uv run xf crawl                                # keeps using TunnelBear
 uv run xf crawl --direct                       # stop using it
-uv run xf tunnelbear fetch https://ifconfig.me -c FR    # check the IP sites see
-uv run xf tunnelbear serve -c FR --port 8118   # a local proxy any program can use
+uv run xf tunnelbear fetch https://ipinfo.io/json  # check the IP sites see
+uv run xf tunnelbear serve --port 8118         # a local proxy any program can use
 ```
+
+TunnelBear's proxy servers in every country are used in turn, in a shuffled order: one server for 8,000 requests, then the next, and the next at once if one fails. The log says which, e.g. `After 8,000 requests, moving to TunnelBear server de-123.lazerpenguin.com (DE)`. The 8,000 is `REQUESTS_PER_SERVER` in `src/xfcrawl/tunnelbear/rotation.py`. The server list is fetched at the start and every 6 hours; if a request can't get through on any of 10 servers in a row, TunnelBear is taken to be down and the crawl stops.
 
 `xf tunnelbear login` saves login tokens, never your password, in `.crawl-store/tunnelbear.json` in the current directory (readable only by you). The tokens are renewed automatically, so you only log in again after `uv run xf tunnelbear logout` or if TunnelBear revokes them. The login belongs to the directory: log in in each crawl directory that uses TunnelBear, or set `TB_STATE=/path/to/file.json` to share one.
 

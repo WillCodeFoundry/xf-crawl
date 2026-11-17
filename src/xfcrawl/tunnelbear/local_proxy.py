@@ -50,7 +50,8 @@ class LocalProxy:
 
     async def _open_upstream(self) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
         last_error: Exception | None = None
-        for _ in self._rotation.hosts:
+        await asyncio.get_running_loop().run_in_executor(None, self._rotation.take_turn)
+        for _ in range(self._rotation.max_failures):
             host = self._rotation.host
             try:
                 return await asyncio.wait_for(

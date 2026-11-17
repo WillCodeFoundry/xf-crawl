@@ -17,6 +17,7 @@ from xfcrawl.tunnelbear.account import (
     Credentials,
     CredentialsFile,
     Endpoints,
+    Server,
     TokenFile,
     TunnelBearAccount,
     TunnelBearError,
@@ -53,19 +54,14 @@ def test_logout_forgets_the_login(tunnelbear, xf):
     assert not TOKENS.exists()
 
 
-def test_countries(tunnelbear, xf):
-    assert xf("tunnelbear", "countries").out.split() == ["FR", "France"]
-
-
-def test_an_unknown_country_is_refused(tunnelbear):
+def test_every_server_in_every_country_is_listed_once(tunnelbear):
     tb = account()
     tb.login(Credentials("me@example.com", "x"), mfa_code=None)
-    with pytest.raises(TunnelBearError, match="unknown country 'XX'"):
-        tb.servers("XX")
+    assert sorted(tb.all_servers(), key=lambda s: s.host) == [Server("127.0.0.1", "FR"), Server("localhost", "FR")]
 
 
 def test_fetch_goes_through_tunnelbear(forum, tunnelbear, xf, tmp_path):
-    result = xf("tunnelbear", "fetch", forum.url, "-c", "FR", "-o", str(tmp_path / "page.html"))
+    result = xf("tunnelbear", "fetch", forum.url, "-o", str(tmp_path / "page.html"))
     assert result.code == 0, result.err
     assert "HTTP 200" in result.err
     assert "Forums" in (tmp_path / "page.html").read_text()
@@ -74,7 +70,7 @@ def test_fetch_goes_through_tunnelbear(forum, tunnelbear, xf, tmp_path):
 
 def test_without_a_login_or_credentials_the_message_says_what_to_do(tunnelbear, xf):
     CREDENTIALS_FILE.unlink()
-    result = xf("tunnelbear", "countries")
+    result = xf("tunnelbear", "fetch", "http://forum.example/")
     assert result.code == 1
     assert "uv run xf tunnelbear login" in result.err
     assert "tunnelbear-credentials.json" in result.err
@@ -102,7 +98,7 @@ def test_an_mfa_code_is_asked_for_and_sent(tunnelbear):
 def test_serve_relays_requests_through_tunnelbear(forum, tunnelbear):
     tb = account()
     tb.login(Credentials("me@example.com", "x"), mfa_code=None)
-    rotation = ServerRotation(tb, "FR")
+    rotation = ServerRotation(tb)
     rotation.renew()                                  # the fake's first token is stale on purpose
     relay = LocalProxy(rotation, 0, ssl.create_default_context(cafile=os.environ["REQUESTS_CA_BUNDLE"]))
     ready = threading.Event()
@@ -123,7 +119,7 @@ def expire_the_saved_login(tunnelbear, xf):
 
 def test_a_refused_login_is_renewed_from_the_credentials_file(forum, tunnelbear, xf):
     expire_the_saved_login(tunnelbear, xf)
-    result = xf("crawl", forum.url, "--tunnelbear", "FR")
+    result = xf("crawl", forum.url, "--tunnelbear")
     assert result.code == 0, result.out
     assert "no longer accepts the saved login; logging in again as me@example.com" in result.err
     assert tunnelbear.logins == [EMAIL, EMAIL]
@@ -135,7 +131,7 @@ def test_a_refused_login_is_renewed_from_the_credentials_file(forum, tunnelbear,
 def test_without_credentials_a_refused_login_stops_the_crawl_saying_what_to_do(forum, tunnelbear, xf):
     expire_the_saved_login(tunnelbear, xf)
     CREDENTIALS_FILE.unlink()
-    result = xf("crawl", forum.url, "--tunnelbear", "FR")
+    result = xf("crawl", forum.url, "--tunnelbear")
     assert result.code == 1
     assert "no longer accepts the saved login" in result.out
     assert "uv run xf tunnelbear login" in result.out

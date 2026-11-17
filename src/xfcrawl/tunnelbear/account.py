@@ -1,4 +1,4 @@
-"""TunnelBearAccount: logging in to TunnelBear, and what the account gives: its VPN token, countries and
+"""TunnelBearAccount: logging in to TunnelBear, and what the account gives: its VPN token and
 proxy servers. The only module that talks to TunnelBear's API.
 
 The login is kept in a TokenFile: the email, a device id and the tokens, never the password.
@@ -63,6 +63,13 @@ class Endpoints:
             polarbear_api=environment.get("TB_PB_API_URL", default.polarbear_api),
             proxy_port=int(environment.get("TB_PROXY_PORT", default.proxy_port)),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class Server:
+    host: str
+    country: str
+    """Its country's ISO code, as TunnelBear lists it."""
 
 
 @dataclass(frozen=True)
@@ -185,21 +192,20 @@ class TunnelBearAccount:
         countries: list[dict[str, Any]] = self._polarbear_get("/countries")
         return countries
 
-    def servers(self, country: str | None) -> list[str]:
-        """Proxy server hostnames for an ISO country code, or for the closest region when None."""
-        if country is None:
-            data = self._polarbear_get("/vpns")
-            if not data.get("vpns") and data.get("country_iso"):
-                data = self._polarbear_get(f"/vpns/countries/{data['country_iso']}")
-        else:
-            known = {c.get("iso", "").upper(): c.get("iso") for c in self.countries()}
-            if country.upper() not in known:
-                raise TunnelBearError(f"unknown country {country!r}; see `xf tunnelbear countries`")
-            data = self._polarbear_get(f"/vpns/countries/{known[country.upper()]}")
-        hosts = [vpn["url"] for vpn in data.get("vpns", []) if vpn.get("url")]
-        if not hosts:
+    def all_servers(self) -> list[Server]:
+        """Every proxy server TunnelBear lists, in every country; a server listed twice counts once."""
+        servers: dict[str, Server] = {}
+        for country in self.countries():
+            iso = country.get("iso")
+            if not iso:
+                continue
+            data = self._polarbear_get(f"/vpns/countries/{iso}")
+            for vpn in data.get("vpns", []):
+                if vpn.get("url"):
+                    servers.setdefault(vpn["url"], Server(vpn["url"], str(iso).upper()))
+        if not servers:
             raise TunnelBearError("TunnelBear listed no proxy servers")
-        return hosts
+        return list(servers.values())
 
     # -- internals ----------------------------------------------------------------------------------
     def _post(self, base: str, path: str, payload: Mapping[str, str]) -> dict[str, Any]:

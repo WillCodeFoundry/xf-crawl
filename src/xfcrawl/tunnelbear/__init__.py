@@ -7,7 +7,7 @@ No OpenVPN, no root, no system-wide change: only what is sent through the proxy 
 2. Exchange the access token for a PolarBear token, the proxy back end: ``POST <polarbear>/auth``; the
    token comes back in the Authorization header.
 3. ``GET <polarbear>/user`` gives the VPN token, ``/countries`` the countries, and
-   ``/vpns/countries/<ISO>`` the proxy servers for one.
+   ``/vpns/countries/<ISO>`` the proxy servers for one; xf uses the servers of every country.
 4. Use ``https://<server>:8080`` as an HTTPS proxy, with ``Proxy-Authorization: Basic <vpn token>:<vpn token>``.
 
 This is TunnelBear's private API, not a published one: it can change with any extension update, and using

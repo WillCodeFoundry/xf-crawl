@@ -12,8 +12,7 @@ from xfcrawl.layout import StoreLayout
 
 @dataclass(frozen=True)
 class TunnelBearProxy:
-    country: str | None
-    """An ISO code such as FR; None for the closest region."""
+    """Through TunnelBear, on every server it has in turn."""
 
 
 @dataclass(frozen=True)
@@ -67,8 +66,7 @@ def _proxy_from_json(data: dict[str, str] | None) -> ProxySetting | None:
     if data is None:
         return None
     if data.get("type") == "tunnelbear":
-        country = data.get("country")
-        return TunnelBearProxy(None if country in (None, "auto") else country)
+        return TunnelBearProxy()  # a "country" saved by an earlier version is ignored: every server is used
     if data.get("type") == "url" and data.get("url"):
         return UrlProxy(data["url"])
     raise XfError(f"unrecognised proxy setting in config.json ({data}); not crawling directly. "
@@ -78,10 +76,10 @@ def _proxy_from_json(data: dict[str, str] | None) -> ProxySetting | None:
 def _proxy_to_json(proxy: ProxySetting) -> dict[str, str]:
     if isinstance(proxy, UrlProxy):
         return {"type": "url", "url": proxy.url}
-    return {"type": "tunnelbear", "country": proxy.country or "auto"}
+    return {"type": "tunnelbear"}
 
 
 def describe(proxy: ProxySetting) -> str:
     if isinstance(proxy, UrlProxy):
         return f"proxy {proxy.url}"
-    return f"TunnelBear ({proxy.country or 'closest region'})"
+    return "TunnelBear (every server, in turn)"

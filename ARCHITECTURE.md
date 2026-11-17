@@ -40,7 +40,7 @@ How xf-crawl is put together, and the rules its code follows.
 | `stored_crawl.py` | A crawl as stored, for the commands that read one without crawling. |
 | `migration.py` | Converting older stores; the only module that knows their layouts. |
 | `mining/` | `pages.py` reads XenForo pages with BeautifulSoup; `stats.py` computes `xf mine`'s statistics. |
-| `tunnelbear/` | `account.py` talks to TunnelBear's API; `rotation.py` makes the account a `ProxyRoute`; `local_proxy.py` is `xf tunnelbear serve`. |
+| `tunnelbear/` | `account.py` talks to TunnelBear's API; `rotation.py` makes the account a `ProxyRoute`, moving through every server in turn (`REQUESTS_PER_SERVER`); `local_proxy.py` is `xf tunnelbear serve`. |
 | `atomic_files.py`, `errors.py` | Writing a file in one step; `XfError`, a problem the user can fix. |
 
 ### Everything else
