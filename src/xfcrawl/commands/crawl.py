@@ -4,7 +4,6 @@ import argparse
 import logging
 import os
 import random
-import sys
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -17,7 +16,7 @@ import requests
 
 from xfcrawl import config, migration
 from xfcrawl.browser import Browser
-from xfcrawl.commands.tunnelbear import ask_for_credentials, open_account
+from xfcrawl.commands.tunnelbear import logged_in_account
 from xfcrawl.config import CrawlConfig, ProxySetting, TunnelBearProxy, UrlProxy
 from xfcrawl.crawler import Connection, Crawl, CrawlSummary, Remedies, connect
 from xfcrawl.errors import XfError
@@ -29,7 +28,7 @@ from xfcrawl.plan import CrawlPlan
 from xfcrawl.proxy import FixedProxy, ProxyRoute, proxied_session
 from xfcrawl.store import PageStore
 from xfcrawl.trouble import LONGEST_PAUSE, Trouble
-from xfcrawl.tunnelbear.account import Credentials
+from xfcrawl.tunnelbear.account import TunnelBearAccount
 from xfcrawl.tunnelbear.rotation import ServerRotation
 from xfcrawl.visitor import Visitor, VisitorFile
 
@@ -80,6 +79,9 @@ def main(args: argparse.Namespace) -> int:
     migration.refuse_old_layout(directory)
     layout = StoreLayout.in_directory(directory)
     crawl_config = settle_config(layout, args.url, requested_proxy_change(args), requested_forums_change(args))
+    account = None
+    if isinstance(crawl_config.proxy, TunnelBearProxy):  # before anything slow, so a used-up account stops at once
+        account = logged_in_account(layout, os.environ)
     store = PageStore.open(layout)
     backoff = Backoff(RetryPolicy(), _now(), ignore=args.retry_failed)
     plan = CrawlPlan(crawl_config.start_url, store, LinkIndex(layout.link_index), backoff, crawl_config.only_forums)
@@ -93,8 +95,7 @@ def main(args: argparse.Namespace) -> int:
     visitor_file.save(visitor)
     back = f"back with {len(visitor.cookies)} cookies" if visitor.returning else "visiting for the first time"
     _LOGGER.info("Passing for %s, %s", visitor.browser.describe(), back)
-    credentials = ask_for_credentials(layout, interactive=sys.stdin.isatty())
-    open_route = partial(proxy_route, crawl_config.proxy, layout, os.environ, credentials)
+    open_route = partial(proxy_route, crawl_config.proxy, account)
     open_connection = partial(connect_to_site, crawl_config, args, os.environ, open_route, visitor)
     try:
         crawl = Crawl(plan, store, open_connection, _now, time.monotonic, Trouble(args.longest_pause))
@@ -207,19 +208,14 @@ def _nothing() -> str | None:
     return None
 
 
-def proxy_route(
-    proxy: ProxySetting | None,
-    layout: StoreLayout,
-    environment: Mapping[str, str],
-    credentials: Callable[[], Credentials],
-) -> ProxyRoute | None:
+def proxy_route(proxy: ProxySetting | None, account: TunnelBearAccount | None) -> ProxyRoute | None:
+    """The route ``proxy`` asks for; ``account`` is the TunnelBear account, logged in, when it asks for that."""
     if proxy is None:
         return None
     if isinstance(proxy, UrlProxy):
         return FixedProxy(proxy.url)
-    account = open_account(layout, environment)
-    if not account.is_logged_in():
-        account.login(credentials(), mfa_code=None)
+    if account is None:
+        raise XfError("the crawl goes through TunnelBear, but no TunnelBear account was opened")
     return ServerRotation(account)
 
 

@@ -121,7 +121,8 @@ def test_a_refused_login_is_renewed_from_the_credentials_file(forum, tunnelbear,
     expire_the_saved_login(tunnelbear, xf)
     result = xf("crawl", forum.url, "--tunnelbear")
     assert result.code == 0, result.out
-    assert "no longer accepts the saved login; logging in again as me@example.com" in result.err
+    assert "no longer accepts the saved login" in result.err
+    assert "Now using TunnelBear account me@example.com" in result.err
     assert tunnelbear.logins == [EMAIL, EMAIL]
     assert json.loads(TOKENS.read_text())["refresh_token"] == "r2"
     assert PASSWORD not in TOKENS.read_text()
@@ -133,8 +134,8 @@ def test_without_credentials_a_refused_login_stops_the_crawl_saying_what_to_do(f
     CREDENTIALS_FILE.unlink()
     result = xf("crawl", forum.url, "--tunnelbear")
     assert result.code == 1
-    assert "no longer accepts the saved login" in result.out
-    assert "uv run xf tunnelbear login" in result.out
+    assert "no longer accepts the saved login" in result.err
+    assert "uv run xf tunnelbear login" in result.err
     assert forum.hits == []
 
 
@@ -205,3 +206,47 @@ def test_data_needs_a_saved_login_and_never_picks_an_account(tunnelbear, xf):
     assert result.code == 1
     assert "xf tunnelbear login" in result.err
     assert tunnelbear.logins == []
+
+
+SPARE = "spare@example.com"
+
+
+def test_a_crawl_moves_past_accounts_out_of_data_or_refused(forum, tunnelbear, xf):
+    assert xf("tunnelbear", "login").code == 0          # as me@example.com, the only account listed yet
+    write_credentials([(EMAIL, PASSWORD), ("wrong@example.com", "pw"), (SPARE, "pw")])
+    tunnelbear.used_up, tunnelbear.wrong_password = {EMAIL}, {"wrong@example.com"}
+    result = xf("crawl", forum.url, "--tunnelbear", "--max-fetches", "1")
+    assert result.code == 0, result.err
+    assert "Now using TunnelBear account spare@example.com" in result.err
+    assert json.loads(TOKENS.read_text())["email"] == SPARE
+    assert forum.direct_hits() == []
+
+
+def test_a_crawl_stops_before_anything_when_no_account_has_data(forum, tunnelbear, xf):
+    assert xf("tunnelbear", "login").code == 0
+    write_credentials([(EMAIL, PASSWORD), (SPARE, "pw")])
+    tunnelbear.used_up = {EMAIL, SPARE}
+    result = xf("crawl", forum.url, "--tunnelbear")
+    assert result.code == 1
+    assert "no TunnelBear account can be used" in result.err
+    assert "me@example.com: no data left" in result.err and "spare@example.com: no data left" in result.err
+    assert forum.hits == []
+
+
+def test_running_out_of_data_mid_crawl_moves_to_the_next_account(tunnelbear):
+    tb = TunnelBearAccount(Endpoints.from_environment(os.environ), TokenFile(TOKENS), requests.Session(),
+                           relogin=lambda: [Credentials(EMAIL, PASSWORD), Credentials(SPARE, "pw")])
+    tb.login(Credentials(EMAIL, PASSWORD), mfa_code=None)
+    tunnelbear.used_up = {EMAIL}
+    assert tb.vpn_token()
+    assert tb.email == SPARE
+
+
+def test_a_login_refused_mid_crawl_moves_to_the_next_account_that_works(tunnelbear):
+    tb = TunnelBearAccount(Endpoints.from_environment(os.environ), TokenFile(TOKENS), requests.Session(),
+                           relogin=lambda: [Credentials(EMAIL, PASSWORD), Credentials(SPARE, "pw")])
+    tb.login(Credentials(EMAIL, PASSWORD), mfa_code=None)
+    tunnelbear.expired_access, tunnelbear.refused_refresh = {"a1"}, {"r1"}
+    tunnelbear.wrong_password = {EMAIL}  # its password changed, which revoked the login
+    assert tb.vpn_token()
+    assert tb.email == SPARE

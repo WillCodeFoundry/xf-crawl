@@ -50,6 +50,9 @@ class MockTunnelBear:
         self.plans: list[dict[str, Any]] = [{"platform": "Browser", "maxBandwidth": 2_000_000_000}]
         self.devices: list[dict[str, int]] = []     # what PolarBear's /data lists as each device's use
         self.data_calls = 0
+        self.used_up: set[str] = set()              # accounts out of data: /data shows it, /user gives no token
+        self.wrong_password: set[str] = set()       # accounts whose login is refused
+        self.current = ""                           # the account logged in last
         self.ca = trustme.CA()
         self.ca_file = tmp_path / "test-ca.pem"
         self.ca.cert_pem.write_to_path(str(self.ca_file))
@@ -74,6 +77,9 @@ class MockTunnelBear:
             return 200, {"access_token": "a1", "refresh_token": "r1"}, {}
         if self.mfa:
             return 200, {"mfa_type": "totp", "login_token": "lt1"}, {}
+        if body["username"] in self.wrong_password:
+            return 401, {"error_message": "wrong email or password"}, {}
+        self.current = body["username"]
         self.logins.append(body["username"])
         n = len(self.logins)
         return 200, {"access_token": f"a{n}", "refresh_token": f"r{n}"}, {}
@@ -83,15 +89,14 @@ class MockTunnelBear:
             return 200, {"email": EMAIL, "plans": self.plans}, {}
         if path == "/data":
             self.data_calls += 1
+            if self.current in self.used_up:
+                return 200, {"devices": [{"down_bytes_used": self.plans[0]["maxBandwidth"], "up_bytes_used": 0}]}, {}
             return 200, {"devices": self.devices}, {}
         return self._proxy_api_get(path)
 
     def _proxy_api_get(self, path: str) -> ApiReply:
         if path == "/user":
-            self.user_calls += 1
-            if self.user_calls_allowed is not None and self.user_calls > self.user_calls_allowed:
-                return 500, {"message": "down"}, {}
-            return 200, {"vpn_token": "tok1" if self.user_calls == 1 else "tok2"}, {}
+            return self._user()
         if path == "/countries":
             return 200, [{"iso": "FR", "name": "France"}, {"iso": "DE", "name": "Germany"}], {}
         if path == "/vpns/countries/FR":
@@ -99,6 +104,14 @@ class MockTunnelBear:
         if path == "/vpns/countries/DE":
             return 200, {"vpns": [{"url": "localhost"}]}, {}  # listed in two countries: counted once
         return 404, {"message": "not found"}, {}
+
+    def _user(self) -> ApiReply:
+        if self.current in self.used_up:
+            return 200, {}, {}
+        self.user_calls += 1
+        if self.user_calls_allowed is not None and self.user_calls > self.user_calls_allowed:
+            return 500, {"message": "down"}, {}
+        return 200, {"vpn_token": "tok1" if self.user_calls == 1 else "tok2"}, {}
 
     def _start_api(self) -> None:
         tb = self
