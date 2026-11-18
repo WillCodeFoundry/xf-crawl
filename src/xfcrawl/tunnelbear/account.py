@@ -7,7 +7,6 @@ The login is kept in a TokenFile: the email, a device id and the tokens, never t
 import json
 import logging
 import os
-import random
 import threading
 import uuid
 from collections.abc import Callable, Mapping
@@ -43,6 +42,10 @@ class TunnelBearError(XfError):
     def refused(self) -> bool:
         """Whether TunnelBear refused the request (a 4xx), rather than failing to answer it."""
         return self.status is not None and 400 <= self.status < 500
+
+
+class LoginRefused(TunnelBearError):
+    """TunnelBear refused the saved login itself: its refresh token expired, or was revoked."""
 
 
 @dataclass(frozen=True)
@@ -84,12 +87,11 @@ class CredentialsFile:
 
         [{"email": "me@example.com", "password": "..."}, {"email": "other@example.com", "password": "..."}]
 
-    Read when needed, never written; a login picks one account at random.
+    Read when needed, never written. Accounts are tried in the order listed.
     """
 
-    def __init__(self, path: Path, rng: random.Random | None = None) -> None:
+    def __init__(self, path: Path) -> None:
         self.path = path
-        self._rng = rng or random.Random()
 
     def accounts(self) -> list[Credentials]:
         """The accounts listed, or none if there is no file; raises TunnelBearError if it can't be used."""
@@ -105,10 +107,10 @@ class CredentialsFile:
                                   f"({type(error).__name__}: {error})") from error
         return [account for account in accounts if account.email and account.password]
 
-    def pick(self) -> Credentials | None:
-        """One of the accounts, at random, or None if none are listed."""
+    def first(self) -> Credentials | None:
+        """The first account listed, or None if none are."""
         accounts = self.accounts()
-        return self._rng.choice(accounts) if accounts else None
+        return accounts[0] if accounts else None
 
 
 class TokenFile:
@@ -148,18 +150,22 @@ class TunnelBearAccount:
         endpoints: Endpoints,
         tokens: TokenFile,
         http: requests.Session,
-        relogin: Callable[[], Credentials | None] = lambda: None,
+        relogin: Callable[[], list[Credentials]] = list,
     ) -> None:
         """``http`` talks to TunnelBear's API directly, as the extension does; it is not the proxy.
-        ``relogin`` gives the email and password to log in with again if TunnelBear refuses the saved
-        login, or None; it must not ask anyone, as it is called in the middle of a crawl."""
+        ``relogin`` gives the accounts to try, in order, when the one logged in can't be used (TunnelBear
+        refuses its login, or it has no data left); it must not ask anyone, as it is called mid-crawl."""
         self.endpoints = endpoints
         self._relogin = relogin
         self._tokens = tokens
         self._http = http
         self._state = tokens.load()
         self._state.setdefault("device", str(uuid.uuid4()))  # the extension's random uuid4, kept for good
-        self._lock = threading.Lock()  # tb-proxy serve renews the token from a worker thread
+        # tb-proxy serve renews the token from a worker thread. Reentrant: a PolarBear call can find the login
+        # refused, and logging in to another account checks its data with PolarBear calls of its own.
+        self._lock = threading.RLock()
+        self._switching = False
+        self._fresh = False  # whether this run got the access token itself, so it can't be stale yet
 
     def is_logged_in(self) -> bool:
         return bool(self._state.get("refresh_token"))
@@ -195,16 +201,54 @@ class TunnelBearAccount:
         self._state = {"device": str(uuid.uuid4())}
 
     def vpn_token(self) -> str:
-        token = self._polarbear_get("/user").get("vpn_token")
+        """The proxy's credential. When TunnelBear gives none (the account is out of data, or not confirmed),
+        moves to another account, as ``relogin`` lists them, that has data left."""
+        with self._lock:
+            token = self._polarbear_get("/user").get("vpn_token")
+            if not token:
+                self._switch_account([f"{self.email}: TunnelBear gave no VPN token (out of data, or not confirmed?)"],
+                                     skip=self.email)
+                token = self._polarbear_get("/user").get("vpn_token")
         if not token:
-            raise TunnelBearError("TunnelBear gave no VPN token (account out of data, or not confirmed?)")
+            raise TunnelBearError(f"TunnelBear gave {self.email} no VPN token, though it has data left")
         return str(token)
+
+    def use_account_with_data(self) -> None:
+        """Stay logged in as this login if it has data left, else log in as the first account ``relogin``
+        lists that has some. Raises TunnelBearError, saying why each failed, if none can be used."""
+        with self._lock:
+            if not self.is_logged_in():
+                self._switch_account([], skip=None)
+                return
+            try:
+                problem = self.data_problem()
+            except LoginRefused as refusal:
+                self._log_in_again(refusal)
+                return
+            if problem is not None:
+                self._switch_account([f"{self.email}: {problem}"], skip=self.email)
+
+    def data_problem(self) -> str | None:
+        """Why this login can't be used, or None if it has data left: under 0.5% counts as none, as in
+        TunnelBear's extension, which turns the proxy off then. Raises LoginRefused if TunnelBear refuses
+        the login itself."""
+        try:
+            allowance, used = self.data_allowance()
+        except LoginRefused:
+            raise
+        except TunnelBearError as error:
+            return str(error)
+        _LOGGER.info("TunnelBear %s", describe_allowance(self.email, allowance, used))
+        if allowance != -1 and (allowance - used) * 200 < allowance:
+            return f"no data left ({(allowance - used) / 1e9:.2f} GB of {allowance / 1e9:.2f} GB)"
+        return None
 
     def data_allowance(self) -> tuple[int, int]:
         """The account's data allowance and the bytes used of it, both in bytes, as the extension works
         them out: the Browser plan's maxBandwidth (-1 for unlimited), less what every device has sent and
         received."""
-        self._refresh()  # a fresh access token, so /v2/account can't refuse a stale one
+        if not self._fresh:
+            self._refresh(may_log_in_again=False)  # so /v2/account can't refuse a stale access token
         response = self._http.get(
             self.endpoints.tunnelbear_api + "/v2/account",
             headers={**_APP_HEADERS, "authorization": "Bearer " + self._state["access_token"]},
@@ -256,8 +300,9 @@ class TunnelBearAccount:
         self._state.update(access_token=body["access_token"], refresh_token=body["refresh_token"])
         self._state.pop("polarbear_token", None)
         self._tokens.save(self._state)
+        self._fresh = True
 
-    def _refresh(self) -> None:
+    def _refresh(self, *, may_log_in_again: bool = True) -> None:
         if not self.is_logged_in():
             raise TunnelBearError("not logged in to TunnelBear; run `xf tunnelbear login`")
         try:
@@ -268,23 +313,57 @@ class TunnelBearAccount:
         except TunnelBearError as error:
             if not error.refused:
                 raise
+            if not may_log_in_again:
+                raise LoginRefused(str(error), error.status) from error
             self._log_in_again(error)
             return
         self._store_tokens(body)
 
     def _log_in_again(self, refusal: TunnelBearError) -> None:
-        """TunnelBear refused the saved login (it expired, or was revoked): log in again if ``relogin``
-        gives credentials."""
-        credentials = self._relogin()
-        if credentials is None:
-            raise TunnelBearError(
-                f"TunnelBear no longer accepts the saved login ({refusal}); log in again with "
-                "`uv run xf tunnelbear login`, or list accounts in tunnelbear-credentials.json to have it done "
-                "for you",
-                refusal.status,
-            ) from refusal
-        _LOGGER.info("TunnelBear no longer accepts the saved login; logging in again as %s", credentials.email)
-        self.login(credentials, mfa_code=None)
+        """TunnelBear refused the saved login (it expired, or was revoked): move to an account ``relogin``
+        lists that logs in and has data left: it may be this one again, with its password."""
+        if self._switching:  # already moving between accounts: this one is simply refused
+            raise LoginRefused(str(refusal), refusal.status) from refusal
+        _LOGGER.info("TunnelBear no longer accepts the saved login for %s; trying the other accounts", self.email)
+        self._switch_account([f"{self.email}: TunnelBear no longer accepts the saved login ({refusal})"], skip=None)
+
+    def _switch_account(self, problems: list[str], skip: str | None) -> None:
+        """Log in as the first account ``relogin`` lists, other than ``skip``, that logs in and has data left.
+        Raises TunnelBearError listing ``problems`` and why each account failed, if none does."""
+        tried = {skip}
+        self._switching = True
+        try:
+            for credentials in self._relogin():
+                if credentials.email not in tried:
+                    tried.add(credentials.email)
+                    if self._usable_as(credentials, problems):
+                        return
+        finally:
+            self._switching = False
+        raise TunnelBearError("no TunnelBear account can be used:\n  " + "\n  ".join(problems) +
+                              "\nlog in with `uv run xf tunnelbear login`, or list accounts in "
+                              "tunnelbear-credentials.json to have it done for you")
+
+    def _usable_as(self, credentials: Credentials, problems: list[str]) -> bool:
+        """Whether logging in as ``credentials`` gave an account with data left; if not, adds why to
+        ``problems``."""
+        try:
+            problem = self._login_problem(credentials) or self.data_problem()
+        except LoginRefused as refusal:
+            problem = str(refusal)
+        if problem is None:
+            _LOGGER.info("Now using TunnelBear account %s", credentials.email)
+            return True
+        problems.append(f"{credentials.email}: {problem}")
+        _LOGGER.info("TunnelBear account %s can't be used (%s)", credentials.email, problem)
+        return False
+
+    def _login_problem(self, credentials: Credentials) -> str | None:
+        try:
+            self.login(credentials, mfa_code=None)
+        except TunnelBearError as error:
+            return f"login refused: {error}"
+        return None
 
     def _polarbear_auth(self, *, may_refresh: bool) -> None:
         if not self._state.get("access_token"):
@@ -322,6 +401,15 @@ class TunnelBearAccount:
                 _raise_for(response)
                 return response.json()
         raise TunnelBearError(f"PolarBear kept refusing {path} after a fresh login")
+
+
+def describe_allowance(email: str, allowance: int, used: int) -> str:
+    """One line on the data left, in GB (10^9 bytes); negative when the account has gone over."""
+    if allowance == -1:
+        return f"{email}: unlimited data"
+    left = allowance - used
+    percent = left / allowance * 100 if allowance else 0.0
+    return f"{email}: {left / 1e9:.2f} GB of {allowance / 1e9:.2f} GB left ({percent:.0f}%)"
 
 
 def _raise_for(response: requests.Response) -> None:
