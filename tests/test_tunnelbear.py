@@ -205,3 +205,14 @@ def test_data_needs_a_saved_login_and_never_picks_an_account(tunnelbear, xf):
     assert result.code == 1
     assert "xf tunnelbear login" in result.err
     assert tunnelbear.logins == []
+
+
+@pytest.mark.parametrize("content", ["", "{", "[]"])
+def test_a_damaged_login_file_says_what_to_do(forum, tunnelbear, xf, content):
+    TOKENS.parent.mkdir(exist_ok=True)
+    TOKENS.write_text(content)
+    result = xf("crawl", forum.url, "--tunnelbear")
+    assert result.code == 1
+    assert "is not a saved TunnelBear login" in result.out + result.err
+    assert "uv run xf tunnelbear login" in result.out + result.err
+    assert forum.hits == []
