@@ -103,7 +103,7 @@ def open_account(layout: StoreLayout, environment: Mapping[str, str]) -> TunnelB
     """The account whose login is saved here; its API is reached directly, not through any proxy."""
     return TunnelBearAccount(
         Endpoints.from_environment(environment), TokenFile(token_path(layout, environment)), requests.Session(),
-        relogin=CredentialsFile(layout.tunnelbear_credentials).shuffled,
+        relogin=CredentialsFile(layout.tunnelbear_credentials).accounts,
     )
 
 
@@ -121,7 +121,7 @@ def logged_in_account(layout: StoreLayout, environment: Mapping[str, str]) -> Tu
 def ask_for_credentials(
     layout: StoreLayout, *, interactive: bool, typed_first: bool = False
 ) -> Callable[[], Credentials]:
-    """How to get a TunnelBear email and password when no login is saved: an account picked at random from
+    """How to get a TunnelBear email and password when no login is saved: the first account in
     tunnelbear-credentials.json, else, in a terminal, typed; with ``typed_first``, typed if there is a
     terminal. Asked only when needed, so a saved login never prompts."""
     accounts = CredentialsFile(layout.tunnelbear_credentials)
@@ -132,7 +132,7 @@ def ask_for_credentials(
         return Credentials(input("TunnelBear email: "), getpass.getpass("TunnelBear password: "))
 
     def credentials() -> Credentials:
-        sources = (typed, accounts.pick) if typed_first else (accounts.pick, typed)
+        sources = (typed, accounts.first) if typed_first else (accounts.first, typed)
         for source in sources:
             found = source()
             if found is not None and found.email and found.password:

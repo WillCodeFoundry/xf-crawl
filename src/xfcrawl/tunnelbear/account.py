@@ -7,7 +7,6 @@ The login is kept in a TokenFile: the email, a device id and the tokens, never t
 import json
 import logging
 import os
-import random
 import threading
 import uuid
 from collections.abc import Callable, Mapping
@@ -88,12 +87,11 @@ class CredentialsFile:
 
         [{"email": "me@example.com", "password": "..."}, {"email": "other@example.com", "password": "..."}]
 
-    Read when needed, never written; a login picks one account at random.
+    Read when needed, never written. Accounts are tried in the order listed.
     """
 
-    def __init__(self, path: Path, rng: random.Random | None = None) -> None:
+    def __init__(self, path: Path) -> None:
         self.path = path
-        self._rng = rng or random.Random()
 
     def accounts(self) -> list[Credentials]:
         """The accounts listed, or none if there is no file; raises TunnelBearError if it can't be used."""
@@ -109,16 +107,10 @@ class CredentialsFile:
                                   f"({type(error).__name__}: {error})") from error
         return [account for account in accounts if account.email and account.password]
 
-    def shuffled(self) -> list[Credentials]:
-        """Every account listed, in a random order."""
+    def first(self) -> Credentials | None:
+        """The first account listed, or None if none are."""
         accounts = self.accounts()
-        self._rng.shuffle(accounts)
-        return accounts
-
-    def pick(self) -> Credentials | None:
-        """One of the accounts, at random, or None if none are listed."""
-        accounts = self.accounts()
-        return self._rng.choice(accounts) if accounts else None
+        return accounts[0] if accounts else None
 
 
 class TokenFile:

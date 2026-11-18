@@ -3,7 +3,6 @@
 import asyncio
 import json
 import os
-import random
 import ssl
 import threading
 from pathlib import Path
@@ -144,12 +143,11 @@ def test_tunnelbear_being_down_is_not_mistaken_for_a_refused_login(tunnelbear):
     assert refused.refused and not down.refused and not TunnelBearError("x").refused
 
 
-def test_logins_without_a_terminal_pick_an_account_at_random(tunnelbear, xf):
+def test_logins_without_a_terminal_use_the_first_account_listed(tunnelbear, xf):
     write_credentials([(f"bear{n}@example.com", "pw") for n in range(5)])
-    for _ in range(12):
+    for _ in range(3):
         assert xf("tunnelbear", "login").code == 0
-    assert len(set(tunnelbear.logins)) > 1
-    assert set(tunnelbear.logins) <= {f"bear{n}@example.com" for n in range(5)}
+    assert tunnelbear.logins == ["bear0@example.com"] * 3
 
 
 def test_the_credentials_file_is_refused_if_others_can_read_it(tunnelbear, xf):
@@ -172,8 +170,8 @@ def test_accounts_missing_an_email_or_password_are_skipped(tmp_path):
     path = tmp_path / "creds.json"
     path.write_text(json.dumps([{"email": "", "password": "p"}, {"email": "a@b", "password": "p"}]))
     path.chmod(0o600)
-    assert CredentialsFile(path, random.Random(1)).accounts() == [Credentials("a@b", "p")]
-    assert CredentialsFile(tmp_path / "missing.json").pick() is None
+    assert CredentialsFile(path).accounts() == [Credentials("a@b", "p")]
+    assert CredentialsFile(tmp_path / "missing.json").first() is None
 
 
 def test_data_left_sums_every_device(tunnelbear, xf):
@@ -211,13 +209,14 @@ def test_data_needs_a_saved_login_and_never_picks_an_account(tunnelbear, xf):
 SPARE = "spare@example.com"
 
 
-def test_a_crawl_moves_past_accounts_out_of_data_or_refused(forum, tunnelbear, xf):
+def test_a_crawl_tries_the_accounts_in_order_past_those_out_of_data_or_refused(forum, tunnelbear, xf):
     assert xf("tunnelbear", "login").code == 0          # as me@example.com, the only account listed yet
-    write_credentials([(EMAIL, PASSWORD), ("wrong@example.com", "pw"), (SPARE, "pw")])
+    write_credentials([(EMAIL, PASSWORD), ("wrong@example.com", "pw"), (SPARE, "pw"), ("last@example.com", "pw")])
     tunnelbear.used_up, tunnelbear.wrong_password = {EMAIL}, {"wrong@example.com"}
     result = xf("crawl", forum.url, "--tunnelbear", "--max-fetches", "1")
     assert result.code == 0, result.err
     assert "Now using TunnelBear account spare@example.com" in result.err
+    assert tunnelbear.logins == [EMAIL, SPARE]  # wrong@ was refused; last@ never needed
     assert json.loads(TOKENS.read_text())["email"] == SPARE
     assert forum.direct_hits() == []
 
