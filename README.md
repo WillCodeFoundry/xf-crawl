@@ -80,6 +80,7 @@ uv run xf crawl                                # keeps using TunnelBear
 uv run xf crawl --direct                       # stop using it
 uv run xf tunnelbear fetch https://ipinfo.io/json  # check the IP sites see
 uv run xf tunnelbear serve --port 8118         # a local proxy any program can use
+uv run xf tunnelbear data                      # how much of the account's data allowance is left
 ```
 
 TunnelBear's proxy servers in every country are used in turn, in a shuffled order: one server for 8,000 requests, then the next, and the next at once if one fails. Whenever the site would see the crawler from a new server, it also sees a new visitor: a new browser, with none of its cookies, so the two servers can't be linked. The log says which, e.g. `After 8,000 requests, moving to TunnelBear server de-123.lazerpenguin.com (DE)`. The 8,000 is `REQUESTS_PER_SERVER` in `src/xfcrawl/tunnelbear/rotation.py`. The server list is fetched at the start and every 6 hours; if a request can't get through on any of 10 servers in a row, TunnelBear is taken to be down and the crawl stops.
