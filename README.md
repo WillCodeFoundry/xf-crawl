@@ -102,12 +102,12 @@ JSON
 chmod 600 .crawl-store/tunnelbear-credentials.json
 ```
 
-Whenever an account is needed and nobody is there to type, xf tries these accounts in a random order. It moves to the next one when an account's login is refused (a wrong password, or MFA) or it has no data left (under 0.5% of its allowance, as for the browser extension). The first that works becomes the saved login. If none works, xf stops before sending anything and lists why each failed.
+Whenever an account is needed and nobody is there to type, xf tries these accounts one by one, in the order listed. It moves to the next one when an account's login is refused (a wrong password, or MFA) or it has no data left (under 0.5% of its allowance, as for the browser extension). The first that works becomes the saved login. If none works, xf stops before sending anything and lists why each failed.
 
 - **Starting a crawl, `fetch` or `serve`:** the saved login's data left is checked first, before the crawl works out what's left to fetch, and logged, e.g. `TunnelBear me@example.com: 1.40 GB of 2.00 GB left (70%)`. If it has none, or there is no saved login, the accounts in the file are tried. With neither a saved login nor the file, you're asked in a terminal.
 - **Mid-crawl:** if TunnelBear stops accepting the saved login (it expired after a long break, or was revoked), the accounts in the file are tried, the same one again with its password included. If the account runs out of data, so that TunnelBear gives no VPN token, the other accounts are tried. Either way the crawl carries on with the account found. Without the file it stops, nothing sent, and says to run `uv run xf tunnelbear login`.
 
-`xf tunnelbear login` in a terminal still asks, so you can choose the account; press Enter at the prompts to pick from the file instead.
+`xf tunnelbear login` in a terminal still asks, so you can choose the account; press Enter at the prompts to use the first account in the file instead.
 
 xf only reads this file, never writes it; the passwords stay there and nowhere else. Accounts with MFA can't log in this way.
 
