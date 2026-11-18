@@ -28,6 +28,7 @@ class PageStore:
         self._stored: dict[ItemRef, int] = {}
         self._stored_count = 0
         self._failures: dict[PageRef, list[Failure]] = {}
+        self._failing: dict[ItemRef, set[int]] = {}  # the pages in _failures, by forum or thread
 
     @classmethod
     def open(cls, layout: StoreLayout) -> "PageStore":
@@ -40,6 +41,14 @@ class PageStore:
     # -- what is stored ------------------------------------------------------------------------------
     def is_stored(self, ref: PageRef) -> bool:
         return bool(self._stored.get(ref.item, 0) >> ref.page & 1)
+
+    def stored_mask(self, item: ItemRef) -> int:
+        """Which of the item's pages are stored: bit n set means page n is."""
+        return self._stored.get(item, 0)
+
+    def failing_pages_of(self, item: ItemRef) -> list[int]:
+        """The item's pages that have failed and not been fetched since."""
+        return sorted(self._failing.get(item, ()))
 
     def stored_pages(self) -> Iterator[PageRef]:
         for item, pages in list(self._stored.items()):
@@ -74,7 +83,7 @@ class PageStore:
             self._name_folder(ref.item, current_slug, rename_named=True)
         atomic_write(self._page_path(ref), gzip.compress(html.encode("utf-8"), compresslevel=6, mtime=0))
         self._mark_stored(ref)
-        if self._failures.pop(ref, None) is not None:
+        if self._drop_failures(ref):
             self._failure_path(ref).unlink(missing_ok=True)
 
     def record_failure(self, ref: PageRef, failure: Failure, known_slug: str | None) -> list[Failure]:
@@ -84,6 +93,7 @@ class PageStore:
         append_line(self._failure_path(ref), failure.to_json_line())
         history = self._failures.setdefault(ref, [])
         history.append(failure)
+        self._failing.setdefault(ref.item, set()).add(ref.page)
         return list(history)
 
     def name_folder(self, item: ItemRef, slug: str | None) -> None:
@@ -124,32 +134,47 @@ class PageStore:
         return self._layout.page_file(self._dir(ref), ref.page, failure=True)
 
     def _scan(self) -> None:
-        self._find_item_dirs()
-        self._read_dir(INDEX_PAGE.item, self._layout.pages_dir)
-        for item, name in list(self._dir_names.items()):
-            self._read_dir(item, self._layout.item_parent(item) / name)
+        paths = self._find_item_dirs()
+        self._read_dir(INDEX_PAGE.item, str(self._layout.pages_dir))
+        for item, path in paths.items():
+            self._read_dir(item, path)
         for ref in [ref for ref in self._failures if self.is_stored(ref)]:
-            self._failures.pop(ref)
+            self._drop_failures(ref)
             self._failure_path(ref).unlink()
 
-    def _find_item_dirs(self) -> None:
+    def _find_item_dirs(self) -> dict[ItemRef, str]:
+        """Name each item's folder, and return its path: kept as found, as building it again costs."""
+        paths: dict[ItemRef, str] = {}
         found = _subdirs(self._layout.forums_dir, Kind.FORUM)
         for group in _subdirs_named_by_number(self._layout.threads_dir):
             found += _subdirs(group, Kind.THREAD)
         for item, path in found:
             previous = self.item_dir(item)
             if previous is None:
-                self._dir_names[item] = path.name
+                self._dir_names[item], paths[item] = path.name, str(path)
                 continue
             # two folders for one item: an interrupted rename. Keep the one with words.
             keep, drop = (path, previous) if _has_words(path) else (previous, path)
             merge_dirs(drop, keep)
-            self._dir_names[item] = keep.name
+            self._dir_names[item], paths[item] = keep.name, str(keep)
+        return paths
 
-    def _read_dir(self, item: ItemRef, path: Path) -> None:
-        if not path.is_dir():
+    def _drop_failures(self, ref: PageRef) -> bool:
+        """Forget the page's failures; returns whether it had any."""
+        if self._failures.pop(ref, None) is None:
+            return False
+        pages = self._failing[ref.item]
+        pages.discard(ref.page)
+        if not pages:
+            del self._failing[ref.item]
+        return True
+
+    def _read_dir(self, item: ItemRef, path: str) -> None:
+        try:
+            entries = list(os.scandir(path))  # no is_dir() first: one system call less per folder
+        except (FileNotFoundError, NotADirectoryError):
             return
-        for entry in os.scandir(path):
+        for entry in entries:
             if entry.name.startswith(PARTIAL_PREFIX):
                 os.remove(entry.path)
                 continue
@@ -161,6 +186,7 @@ class PageStore:
             ref = item.page(name.page)
             if name.is_failure:
                 self._failures[ref] = parse_failures(Path(entry.path).read_text(encoding="utf-8"))
+                self._failing.setdefault(ref.item, set()).add(ref.page)
             else:
                 self._mark_stored(ref)
 

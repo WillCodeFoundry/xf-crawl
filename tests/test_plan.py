@@ -141,3 +141,18 @@ def test_a_page_that_failed_in_this_run_comes_back_once_its_wait_is_over():
     assert plan.next_page(NOW + timedelta(minutes=2)) is None
     assert plan.next_page(NOW + timedelta(minutes=15)) == first                # its turn again
     assert plan.waiting() == {}
+
+
+def test_stored_and_waiting_pages_split_a_thread_into_runs():
+    store = new_store()
+    store.save(INDEX_PAGE, page("/threads/t.10/", "/threads/u.11/page-3"), None)
+    store.save(THREAD.page(1), page("/threads/t.10/page-9"), "t")
+    for stored in (4, 5):
+        store.save(THREAD.page(stored), page(), "t")
+    store.record_failure(THREAD.page(7), Failure(NOW, "http-503"), "t")
+    plan = plan_for(store, NOW + timedelta(minutes=10))
+    assert [ref.key for ref in plan.to_fetch()] == ["thread:11:1"] + [f"thread:10:{n}" for n in (2, 3, 6, 8, 9)] + [
+        "thread:11:2", "thread:11:3"]
+    assert plan.to_fetch_in(Stage.THREAD_FIRST_PAGES) == 1
+    assert plan.to_fetch_in(Stage.THREAD_OTHER_PAGES) == 7
+    assert plan.waiting() == {THREAD.page(7): NOW + timedelta(minutes=15)}

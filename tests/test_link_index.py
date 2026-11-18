@@ -36,3 +36,10 @@ def test_a_line_cut_short_by_a_crash_is_skipped():
 
 def test_no_index_yet_is_empty():
     assert list(LinkIndex(Path("missing.jsonl")).entries()) == []
+
+
+def test_entries_of_some_kinds_skip_the_others():
+    index = LinkIndex(Path("links.jsonl"))
+    index.record_all([entry(INDEX_PAGE), entry(FORUM_PAGE), entry(THREAD.page(1))])
+    assert [e.page for e in index.entries({Kind.THREAD})] == [THREAD.page(1)]
+    assert [e.page for e in index.entries({Kind.INDEX, Kind.FORUM})] == [INDEX_PAGE, FORUM_PAGE]
