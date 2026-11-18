@@ -18,7 +18,14 @@ from xfcrawl.browser import Browser
 from xfcrawl.errors import XfError
 from xfcrawl.layout import StoreLayout
 from xfcrawl.proxy import proxied_session
-from xfcrawl.tunnelbear.account import Credentials, CredentialsFile, Endpoints, TokenFile, TunnelBearAccount
+from xfcrawl.tunnelbear.account import (
+    Credentials,
+    CredentialsFile,
+    Endpoints,
+    TokenFile,
+    TunnelBearAccount,
+    describe_allowance,
+)
 from xfcrawl.tunnelbear.local_proxy import LocalProxy
 from xfcrawl.tunnelbear.rotation import ServerRotation, fetch_through
 
@@ -96,14 +103,18 @@ def open_account(layout: StoreLayout, environment: Mapping[str, str]) -> TunnelB
     """The account whose login is saved here; its API is reached directly, not through any proxy."""
     return TunnelBearAccount(
         Endpoints.from_environment(environment), TokenFile(token_path(layout, environment)), requests.Session(),
-        relogin=CredentialsFile(layout.tunnelbear_credentials).pick,
+        relogin=CredentialsFile(layout.tunnelbear_credentials).shuffled,
     )
 
 
 def logged_in_account(layout: StoreLayout, environment: Mapping[str, str]) -> TunnelBearAccount:
+    """The account to go through: the saved login if it has data left, else the first account in
+    tunnelbear-credentials.json that logs in and has some. With neither a saved login nor that file, the
+    email and password are typed in a terminal. Raises TunnelBearError if no account can be used."""
     account = open_account(layout, environment)
-    if not account.is_logged_in():
+    if not account.is_logged_in() and not CredentialsFile(layout.tunnelbear_credentials).accounts():
         account.login(ask_for_credentials(layout, interactive=sys.stdin.isatty())(), mfa_code=_ask_mfa_code)
+    account.use_account_with_data()
     return account
 
 
@@ -130,15 +141,6 @@ def ask_for_credentials(
                       f"{accounts.path}")
 
     return credentials
-
-
-def describe_allowance(email: str, allowance: int, used: int) -> str:
-    """One line on the data left, in GB (10^9 bytes); negative when the account has gone over."""
-    if allowance == -1:
-        return f"{email}: unlimited data"
-    left = allowance - used
-    percent = left / allowance * 100 if allowance else 0.0
-    return f"{email}: {left / 1e9:.2f} GB of {allowance / 1e9:.2f} GB left ({percent:.0f}%)"
 
 
 def write_body(body: bytes, output: Path | None, stdout: BinaryIO) -> None:
