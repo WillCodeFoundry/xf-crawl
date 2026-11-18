@@ -47,6 +47,9 @@ class MockTunnelBear:
         self.refused_refresh: set[str] = set()      # refresh tokens the dashboard refuses
         self.forwarded: list[str] = []              # URLs the proxy forwarded
         self.rejected = 0             # 407s
+        self.plans: list[dict[str, Any]] = [{"platform": "Browser", "maxBandwidth": 2_000_000_000}]
+        self.devices: list[dict[str, int]] = []     # what PolarBear's /data lists as each device's use
+        self.data_calls = 0
         self.ca = trustme.CA()
         self.ca_file = tmp_path / "test-ca.pem"
         self.ca.cert_pem.write_to_path(str(self.ca_file))
@@ -76,6 +79,14 @@ class MockTunnelBear:
         return 200, {"access_token": f"a{n}", "refresh_token": f"r{n}"}, {}
 
     def api_get(self, path: str) -> ApiReply:
+        if path == "/v2/account":
+            return 200, {"email": EMAIL, "plans": self.plans}, {}
+        if path == "/data":
+            self.data_calls += 1
+            return 200, {"devices": self.devices}, {}
+        return self._proxy_api_get(path)
+
+    def _proxy_api_get(self, path: str) -> ApiReply:
         if path == "/user":
             self.user_calls += 1
             if self.user_calls_allowed is not None and self.user_calls > self.user_calls_allowed:

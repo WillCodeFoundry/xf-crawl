@@ -157,6 +157,11 @@ class TunnelBearAccount:
     def is_logged_in(self) -> bool:
         return bool(self._state.get("refresh_token"))
 
+    @property
+    def email(self) -> str:
+        """The email of the saved login, or "" if none."""
+        return self._state.get("email", "")
+
     def login(self, credentials: Credentials, mfa_code: Callable[[str], str] | None) -> None:
         """Log in and save the tokens. ``mfa_code`` is asked for a code when the account uses MFA; with
         None, such an account can't log in."""
@@ -187,6 +192,27 @@ class TunnelBearAccount:
         if not token:
             raise TunnelBearError("TunnelBear gave no VPN token (account out of data, or not confirmed?)")
         return str(token)
+
+    def data_allowance(self) -> tuple[int, int]:
+        """The account's data allowance and the bytes used of it, both in bytes, as the extension works
+        them out: the Browser plan's maxBandwidth (-1 for unlimited), less what every device has sent and
+        received."""
+        self._refresh()  # a fresh access token, so /v2/account can't refuse a stale one
+        response = self._http.get(
+            self.endpoints.tunnelbear_api + "/v2/account",
+            headers={**_APP_HEADERS, "authorization": "Bearer " + self._state["access_token"]},
+            timeout=_TIMEOUT_SECONDS,
+        )
+        _raise_for(response)
+        plans = response.json().get("plans") or []
+        plan = next((plan for plan in plans if plan.get("platform") == "Browser"), None)
+        if plan is None:
+            raise TunnelBearError("TunnelBear's account lists no Browser plan, so no data allowance")
+        allowance = int(plan["maxBandwidth"])
+        if allowance == -1:
+            return -1, 0
+        devices = self._polarbear_get("/data").get("devices") or []
+        return allowance, sum(int(device["down_bytes_used"]) + int(device["up_bytes_used"]) for device in devices)
 
     def countries(self) -> list[dict[str, Any]]:
         countries: list[dict[str, Any]] = self._polarbear_get("/countries")

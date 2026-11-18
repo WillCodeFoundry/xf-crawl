@@ -173,3 +173,35 @@ def test_accounts_missing_an_email_or_password_are_skipped(tmp_path):
     path.chmod(0o600)
     assert CredentialsFile(path, random.Random(1)).accounts() == [Credentials("a@b", "p")]
     assert CredentialsFile(tmp_path / "missing.json").pick() is None
+
+
+def test_data_left_sums_every_device(tunnelbear, xf):
+    tunnelbear.devices = [{"down_bytes_used": 400_000_000, "up_bytes_used": 100_000_000},
+                          {"down_bytes_used": 90_000_000, "up_bytes_used": 10_000_000}]
+    assert xf("tunnelbear", "login").code == 0
+    result = xf("tunnelbear", "data")
+    assert result.code == 0, result.err
+    assert result.out.strip() == "me@example.com: 1.40 GB of 2.00 GB left (70%)"
+
+
+def test_an_unlimited_account_never_asks_for_its_use(tunnelbear, xf):
+    tunnelbear.plans = [{"platform": "Browser", "maxBandwidth": -1}]
+    xf("tunnelbear", "login")
+    result = xf("tunnelbear", "data")
+    assert result.out.strip() == "me@example.com: unlimited data"
+    assert tunnelbear.data_calls == 0
+
+
+def test_an_account_without_a_browser_plan_says_so(tunnelbear, xf):
+    tunnelbear.plans = [{"platform": "Desktop", "maxBandwidth": 2_000_000_000}]
+    xf("tunnelbear", "login")
+    result = xf("tunnelbear", "data")
+    assert result.code == 1
+    assert "no Browser plan" in result.err
+
+
+def test_data_needs_a_saved_login_and_never_picks_an_account(tunnelbear, xf):
+    result = xf("tunnelbear", "data")
+    assert result.code == 1
+    assert "xf tunnelbear login" in result.err
+    assert tunnelbear.logins == []

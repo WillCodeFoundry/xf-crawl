@@ -35,6 +35,8 @@ def add_parser(subparsers: "argparse._SubParsersAction[argparse.ArgumentParser]"
     actions = parser.add_subparsers(dest="action", required=True)
     actions.add_parser("login", help="log in, and save the login here").set_defaults(func=login_main)
     actions.add_parser("logout", help="forget the login saved here").set_defaults(func=logout_main)
+    actions.add_parser("data", help="how much of the saved login's data allowance is left").set_defaults(
+        func=data_main)
     fetch = actions.add_parser("fetch", help="fetch one URL through TunnelBear, e.g. to check your IP")
     fetch.add_argument("url")
     fetch.add_argument("-o", "--output", type=Path, help="write the body to this file")
@@ -59,6 +61,12 @@ def login_main(_args: argparse.Namespace) -> int:
 def logout_main(_args: argparse.Namespace) -> int:
     open_account(StoreLayout.in_directory(Path.cwd()), os.environ).logout()
     print("Logged out (the login saved here is deleted).")
+    return 0
+
+
+def data_main(_args: argparse.Namespace) -> int:
+    account = open_account(StoreLayout.in_directory(Path.cwd()), os.environ)
+    print(describe_allowance(account.email, *account.data_allowance()))
     return 0
 
 
@@ -122,6 +130,15 @@ def ask_for_credentials(
                       f"{accounts.path}")
 
     return credentials
+
+
+def describe_allowance(email: str, allowance: int, used: int) -> str:
+    """One line on the data left, in GB (10^9 bytes); negative when the account has gone over."""
+    if allowance == -1:
+        return f"{email}: unlimited data"
+    left = allowance - used
+    percent = left / allowance * 100 if allowance else 0.0
+    return f"{email}: {left / 1e9:.2f} GB of {allowance / 1e9:.2f} GB left ({percent:.0f}%)"
 
 
 def write_body(body: bytes, output: Path | None, stdout: BinaryIO) -> None:
