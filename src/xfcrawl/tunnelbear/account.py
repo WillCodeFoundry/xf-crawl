@@ -120,8 +120,15 @@ class TokenFile:
     def load(self) -> dict[str, str]:
         if not self.path.exists():
             return {}
-        loaded: dict[str, str] = json.loads(self.path.read_text(encoding="utf-8"))
-        return loaded
+        try:
+            loaded = json.loads(self.path.read_text(encoding="utf-8"))
+        except ValueError as error:
+            raise TunnelBearError(f"{self.path} is not a saved TunnelBear login ({error}); delete it and run "
+                                  "`uv run xf tunnelbear login`") from error
+        if not isinstance(loaded, dict):
+            raise TunnelBearError(f"{self.path} is not a saved TunnelBear login (not a JSON object); delete it "
+                                  "and run `uv run xf tunnelbear login`")
+        return {str(key): str(value) for key, value in loaded.items()}
 
     def save(self, state: Mapping[str, str]) -> None:
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
