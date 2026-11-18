@@ -15,7 +15,7 @@ path of its first page. Paths, not URLs, keep the file small; the site's address
 """
 
 import json
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -50,13 +50,17 @@ class LinkIndex:
     def __init__(self, path: Path) -> None:
         self._path = path
 
-    def entries(self) -> Iterator[PageLinks]:
+    def entries(self, kinds: Collection[Kind] | None = None) -> Iterator[PageLinks]:
         """The entries in the order they were written, read one at a time: the file can be far bigger than
-        what is worth holding in memory. A line cut short by a crash is skipped; its page is read again."""
+        what is worth holding in memory. A line cut short by a crash is skipped; its page is read again.
+        With ``kinds``, only the entries for pages of those kinds: the others aren't even parsed."""
         if not self._path.exists():
             return
+        prefixes = None if kinds is None else tuple(f'{{"page":"{kind.value}:' for kind in kinds)
         with self._path.open(encoding="utf-8") as lines:
             for line in lines:
+                if prefixes is not None and not line.startswith(prefixes):
+                    continue
                 entry = _parse(line)
                 if entry is not None:
                     yield entry

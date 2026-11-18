@@ -70,3 +70,15 @@ def test_opening_tidies_what_a_crash_left():
     store = PageStore.open(layout())
     assert files() == ["threads/1234/t.1234567/page-0001.html.gz", "threads/1234/t.1234567/page-0002.html.gz"]
     assert store.failing_pages() == {}
+
+
+def test_the_failing_pages_of_an_item_are_known_until_saved():
+    store = PageStore(layout())
+    for page in (3, 1):
+        store.record_failure(THREAD.page(page), Failure(T0, "http-503"), "t")
+    assert store.failing_pages_of(THREAD) == [1, 3]
+    assert PageStore.open(layout()).failing_pages_of(THREAD) == [1, 3]
+    store.save(THREAD.page(1), "<html>ok</html>", "t")
+    store.save(THREAD.page(3), "<html>ok</html>", "t")
+    assert store.failing_pages_of(THREAD) == []
+    assert store.stored_mask(THREAD) == 0b1010

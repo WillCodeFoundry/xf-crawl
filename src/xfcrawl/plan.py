@@ -22,7 +22,6 @@ from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from datetime import datetime
-from itertools import groupby
 from urllib.parse import urlparse, urlsplit
 
 from xfcrawl import xenforo
@@ -112,7 +111,7 @@ class CrawlPlan:
         """Learn from the index's entries for stored pages of these kinds; returns which pages it had, as a
         bitmask per forum or thread (bit n: page n)."""
         indexed: dict[ItemRef, int] = {}
-        for entry in self._links.entries():
+        for entry in self._links.entries(kinds):
             ref = entry.page
             if ref.kind in kinds and self._store.is_stored(ref):
                 indexed[ref.item] = indexed.get(ref.item, 0) | 1 << ref.page
@@ -266,7 +265,10 @@ class CrawlPlan:
                 continue
             if entry.page.kind is Kind.FORUM and link.item.kind is Kind.THREAD:
                 self._listed_in.setdefault(link.item.item_id, entry.page.item_id)
-            added += self._know(link.item, link.last_page, self._origin + link.path)
+            if link.item not in self._first_page_paths:  # the index has the path already: no URL to parse
+                self._first_page_paths[link.item] = link.path
+                self._site_prefix = self._site_prefix or site_prefix(self._origin + link.path)
+            added += self._know(link.item, link.last_page, None)
         return added
 
     def _in_scope(self, item: ItemRef, seen_on: PageRef) -> bool:
@@ -304,13 +306,19 @@ class CrawlPlan:
 
     def _want_pages(self, item: ItemRef, first: int, last: int) -> int:
         """Queue those of the item's pages first to last that are to fetch now, as runs; returns how many.
-        Each page is considered once: an item's pages are only ever added above its last known page."""
-        wanted = [page for page in range(first, last + 1) if self._to_fetch_now(item.page(page))]
-        consecutive = groupby(enumerate(wanted), key=lambda entry: (entry[1] - entry[0], item.page(entry[1]).stage))
-        for (_, stage), run in consecutive:
-            pages = [page for _, page in run]
-            self._push(stage, item.item_id, pages[0], pages[-1])
-        return len(wanted)
+        Each page is considered once: an item's pages are only ever added above its last known page.
+        Worked out on bitmasks (bit n: page n), so the cost grows with the runs, not with the pages."""
+        wanted = ((1 << (last + 1)) - (1 << first)) & ~self._store.stored_mask(item)
+        for page in self._store.failing_pages_of(item):
+            if wanted >> page & 1 and not self._to_fetch_now(item.page(page)):
+                wanted &= ~(1 << page)
+        for start, end in _runs(wanted):
+            first_run = start
+            if item.kind is Kind.THREAD and start == 1 < end:  # a thread's first page is a stage of its own
+                self._push(Stage.THREAD_FIRST_PAGES, item.item_id, 1, 1)
+                first_run = 2
+            self._push(item.page(first_run).stage, item.item_id, first_run, end)
+        return wanted.bit_count()
 
     def _to_fetch_now(self, ref: PageRef) -> bool:
         if self._store.is_stored(ref):
@@ -331,6 +339,16 @@ class CrawlPlan:
 
 _LEARNING_PASSES = (frozenset({Kind.INDEX, Kind.FORUM}), frozenset({Kind.THREAD}))
 _RECORD_BATCH = 5000
+
+
+def _runs(pages: int) -> Iterator[tuple[int, int]]:
+    """The runs of consecutive set bits in ``pages``, lowest first, as (first, last) bit numbers."""
+    while pages:
+        start = (pages & -pages).bit_length() - 1
+        above = pages >> start
+        length = (~above & (above + 1)).bit_length() - 1  # the set bits from ``start`` up
+        yield start, start + length - 1
+        pages &= ~(((1 << length) - 1) << start)
 
 
 def _with_trailing_slash(url: str) -> str:
